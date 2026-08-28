@@ -70,6 +70,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # A fresh runner with no retained Docker credentials from the `build` job -- pulling a
+      # package (even from a public repo, freshly-pushed GHCR packages can require auth) needs
+      # its own login. Caught by this workflow's own first real run ("unauthorized").
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Pull by digest (never by mutable tag)
         run: docker pull "${IMAGE}@${{ needs.build.outputs.digest }}"
       - name: Real end-to-end smoke test (native Linux Docker -- unix_socket works here)
