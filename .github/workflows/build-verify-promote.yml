@@ -1,0 +1,93 @@
+name: build-verify-promote
+
+# ADR-P041: build -> verify (by digest) -> promote. :latest moves ONLY via `docker buildx
+# imagetools create` from an already-verified digest -- never a rebuild-to-promote, so a failed
+# pipeline can never move the tag. Publishes with this repo's OWN automatic GITHUB_TOKEN
+# (permissions: packages: write) -- no shared App token (vsify-release-bot never carries
+# administration/packages scope anywhere in the org's tooling; confirmed during this ADR's design).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: build-verify-promote-${{ github.ref }}
+  cancel-in-progress: false  # never cancel a promote mid-flight
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest ruff
+      - run: ruff check .
+      - run: pytest tests/ -v
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}:sha-${{ github.sha }}
+          provenance: true
+          sbom: true
+
+  verify:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Pull by digest (never by mutable tag)
+        run: docker pull "${IMAGE}@${{ needs.build.outputs.digest }}"
+      - name: Real end-to-end smoke test (native Linux Docker -- unix_socket works here)
+        run: python3 scripts/smoke_test.py "${IMAGE}@${{ needs.build.outputs.digest }}"
+
+  promote:
+    needs: [build, verify]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Move :latest to the already-verified digest (never a rebuild)
+        run: |
+          docker buildx imagetools create \
+            -t "${IMAGE}:latest" \
+            "${IMAGE}@${{ needs.build.outputs.digest }}"

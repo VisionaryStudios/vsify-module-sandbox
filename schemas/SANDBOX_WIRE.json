@@ -1,0 +1,67 @@
+{
+  "$schema_note": "ADR-P041 sandbox serving wire-format golden vectors. Vendored BYTE-IDENTICAL into the vsify-module-sandbox image repo. A test on each side (this repo: tests/test_wire_framing.py; the image repo: tests/test_wire_conformance.py) asserts its own codec produces/consumes these exact bytes. Header layout: MAGIC(4)=b'VSB1' | VERSION(u16 BE) | TYPE(u8) | FLAGS(u8, bit0=truncated) | LENGTH(u32 BE) | payload.",
+  "magic_hex": "56534231",
+  "wire_version": 1,
+  "frame_types": {
+    "READY": 0,
+    "REQUEST": 1,
+    "RESPONSE": 2,
+    "ERROR": 3
+  },
+  "vectors": [
+    {
+      "name": "ready_empty",
+      "frame_type": 0,
+      "payload_utf8": "",
+      "payload_hex": "",
+      "truncated": false,
+      "frame_hex": "565342310001000000000000",
+      "description": "The READY handshake frame \u2014 always empty payload, sent once by the entrypoint after its module import succeeds."
+    },
+    {
+      "name": "request_hello",
+      "frame_type": 1,
+      "payload_utf8": "hello",
+      "payload_hex": "68656c6c6f",
+      "truncated": false,
+      "frame_hex": "56534231000101000000000568656c6c6f",
+      "description": "A minimal well-formed REQUEST frame."
+    },
+    {
+      "name": "response_world",
+      "frame_type": 2,
+      "payload_utf8": "world",
+      "payload_hex": "776f726c64",
+      "truncated": false,
+      "frame_hex": "565342310001020000000005776f726c64",
+      "description": "A minimal well-formed RESPONSE frame."
+    },
+    {
+      "name": "response_truncated",
+      "frame_type": 2,
+      "payload_utf8": "cut-off-by-produ",
+      "payload_hex": "6375742d6f66662d62792d70726f6475",
+      "truncated": true,
+      "frame_hex": "5653423100010201000000106375742d6f66662d62792d70726f6475",
+      "description": "A RESPONSE frame with the truncated flag set BY THE PRODUCER (never invented by a reader)."
+    },
+    {
+      "name": "error_generic",
+      "frame_type": 3,
+      "payload_utf8": "",
+      "payload_hex": "",
+      "truncated": false,
+      "frame_hex": "565342310001030000000000",
+      "description": "An ERROR frame \u2014 signals the sandbox itself detected a fault; the host treats it as a died handle."
+    },
+    {
+      "name": "request_empty",
+      "frame_type": 1,
+      "payload_utf8": "",
+      "payload_hex": "",
+      "truncated": false,
+      "frame_hex": "565342310001010000000000",
+      "description": "A REQUEST frame with an empty payload \u2014 must round-trip cleanly, not be confused with a malformed frame."
+    }
+  ]
+}
