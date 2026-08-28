@@ -17,7 +17,10 @@ concurrency:
   cancel-in-progress: false  # never cancel a promote mid-flight
 
 env:
-  IMAGE: ghcr.io/${{ github.repository }}
+  # Docker tags MUST be lowercase; `github.repository` preserves the org's exact case
+  # ("VisionaryStudios") — a raw `ghcr.io/${{ github.repository }}` fails buildx with
+  # "repository name must be lowercase" (caught by this workflow's own first real run).
+  IMAGE: ghcr.io/visionarystudios/vsify-module-sandbox
 
 jobs:
   test:
