@@ -29,11 +29,20 @@ def _containment_argv(image: str, name: str) -> list[str]:
     ]
 
 
+def _docker_kill(name: str) -> None:
+    """Reliable teardown for a foreground `docker run --rm` container whose entrypoint sits in an
+    infinite serve loop — `proc.terminate()`/`wait()` on the CLI process is NOT reliable here (the
+    CLI process only exits once the CONTAINER exits, and signal-forwarding timing varies); `docker
+    kill <name>` by the explicit --name is. Best-effort: the container may already be gone."""
+    subprocess.run(["docker", "kill", name], capture_output=True, timeout=15)
+
+
 def _run_stdio_check(image: str, entrypoint_kind: str, entrypoint_ref: str) -> None:
     with tempfile.TemporaryDirectory() as d:
         entry = Path(d) / "entrypoint"
         entry.write_text(_ECHO_BODY)
-        argv = _containment_argv(image, f"smoke-stdio-{entrypoint_kind}")
+        name = f"smoke-stdio-{entrypoint_kind}"
+        argv = _containment_argv(image, name)
         argv += ["-i", "--mount", f"type=bind,src={entry},dst=/module/entrypoint,ro"]
         argv += ["--env", f"VSIFY_SANDBOX_ENTRYPOINT_KIND={entrypoint_kind}"]
         argv += ["--env", "VSIFY_SANDBOX_TRANSPORT=stdio"]
@@ -54,8 +63,8 @@ def _run_stdio_check(image: str, entrypoint_kind: str, entrypoint_ref: str) -> N
             print(f"OK stdio/{entrypoint_kind}: READY + echo round-trip verified")
         finally:
             proc.stdin.close()
-            proc.terminate()
-            proc.wait(timeout=10)
+            _docker_kill(name)
+            proc.wait(timeout=15)
 
 
 def _run_unix_socket_check(image: str, entrypoint_kind: str, entrypoint_ref: str) -> None:
@@ -74,7 +83,8 @@ def _run_unix_socket_check(image: str, entrypoint_kind: str, entrypoint_ref: str
         listener.listen(1)
         listener.settimeout(20)
 
-        argv = _containment_argv(image, f"smoke-socket-{entrypoint_kind}")
+        name = f"smoke-socket-{entrypoint_kind}"
+        argv = _containment_argv(image, name)
         argv += ["--mount", f"type=bind,src={entry},dst=/module/entrypoint,ro"]
         argv += ["--mount", f"type=bind,src={sock_dir},dst=/run/sandbox"]
         argv += ["--env", f"VSIFY_SANDBOX_ENTRYPOINT_KIND={entrypoint_kind}"]
@@ -97,8 +107,8 @@ def _run_unix_socket_check(image: str, entrypoint_kind: str, entrypoint_ref: str
             print(f"OK unix_socket/{entrypoint_kind}: READY + echo round-trip verified")
         finally:
             listener.close()
-            proc.terminate()
-            proc.wait(timeout=10)
+            _docker_kill(name)
+            proc.wait(timeout=15)
 
 
 def _check_containment(image: str) -> None:
