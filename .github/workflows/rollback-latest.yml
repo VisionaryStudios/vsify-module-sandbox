@@ -24,7 +24,8 @@ on:
         required: true
 
 env:
-  IMAGE: ghcr.io/visionarystudios/vsify-module-sandbox
+  # Sourced from the repo variable `vars.IMAGE` -- see build-verify-promote.yml's env block for why.
+  IMAGE: ${{ vars.IMAGE }}
 
 jobs:
   reverify-and-move:
@@ -65,6 +66,30 @@ jobs:
           docker pull "${IMAGE}@${DIGEST}"
           python3 scripts/smoke_test.py "${IMAGE}@${DIGEST}"
 
+      # Same "GATE -- fixable findings" pass build-verify-promote.yml runs before `promote` moves
+      # :latest -- the smoke test above only re-verifies functional correctness, not CVE status.
+      # Without this, an operator could roll back to a digest that now carries a fixable
+      # CRITICAL/HIGH (disclosed after that digest's original scan) with zero vulnerability
+      # check, on the one path where review pressure is lowest: an active incident.
+      - name: GATE -- fixable findings in the rollback target
+        uses: ./.github/actions/trivy-scan
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ inputs.digest }}
+          format: table
+          ignore-unfixed: "true"
+          exit-code: "1"
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Resolve BEFORE the move so "Record it" below can log the "from" half of the audit trail,
+      # not just the target digest.
+      - name: Resolve the current :latest digest (for the audit trail)
+        id: previous
+        run: |
+          set -uo pipefail
+          d="$(docker buildx imagetools inspect "${IMAGE}:latest" --format '{{ .Manifest.Digest }}' 2>/dev/null || echo none)"
+          echo "digest=${d}" >> "$GITHUB_OUTPUT"
+
       - name: Move :latest (imagetools only -- never a rebuild)
         env:
           DIGEST: ${{ inputs.digest }}
@@ -76,6 +101,7 @@ jobs:
         if: always()
         env:
           DIGEST: ${{ inputs.digest }}
+          PREVIOUS: ${{ steps.previous.outputs.digest }}
           REASON: ${{ inputs.reason }}
           ACTOR: ${{ github.actor }}
           OUTCOME: ${{ job.status }}
@@ -83,7 +109,8 @@ jobs:
           {
             echo "### rollback"
             echo
-            echo "- digest: \`${DIGEST}\`"
+            echo "- :latest was: \`${PREVIOUS}\`"
+            echo "- :latest now: \`${DIGEST}\`"
             echo "- reason: ${REASON}"
             echo "- actor: ${ACTOR}"
             echo "- outcome: ${OUTCOME}"

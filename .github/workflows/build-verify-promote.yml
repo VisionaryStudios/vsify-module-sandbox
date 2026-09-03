@@ -20,7 +20,10 @@ env:
   # Docker tags MUST be lowercase; `github.repository` preserves the org's exact case
   # ("VisionaryStudios") — a raw `ghcr.io/${{ github.repository }}` fails buildx with
   # "repository name must be lowercase" (caught by this workflow's own first real run).
-  IMAGE: ghcr.io/visionarystudios/vsify-module-sandbox
+  # Sourced from the repo variable `vars.IMAGE` (Settings -> Secrets and variables -> Actions ->
+  # Variables) so it has exactly one definition, shared with base-image-watch.yml and
+  # rollback-latest.yml, instead of 3 independently hand-copied literals.
+  IMAGE: ${{ vars.IMAGE }}
 
 jobs:
   test:
@@ -45,11 +48,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+      # GITHUB_TOKEN is forced READ-ONLY (and secrets are withheld) on any `pull_request` run
+      # whose actor is `dependabot[bot]` -- GitHub treats a Dependabot PR the same as a fork PR
+      # for this purpose, even though it is same-repo. Without GHCR_PUSH_TOKEN, every Dependabot
+      # base-image-bump PR reds here with an auth error and `verify` (needs: build) never runs --
+      # silently defeating the whole point of `.github/dependabot.yml` (issue #352). Register a
+      # PAT with `write:packages` as a Dependabot secret named GHCR_PUSH_TOKEN (Settings ->
+      # Secrets and variables -> Dependabot) to fix this; see CONTRIBUTING.md step B4.
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
       - id: push
         uses: docker/build-push-action@v6
         with:
@@ -104,29 +114,20 @@ jobs:
       # `promote`'s `if:` either -- a needs-failure already skips a job whose `if:` carries no
       # continue-causing expression such as `always()`.)
       #
-      # The env block is repeated on both passes rather than shared via a YAML anchor: GitHub
-      # only added anchor support in Sept 2025 and still rejects merge keys, so an explicit
-      # block is the shape that every parser and linter handles.
+      # Both passes below delegate to .github/actions/trivy-scan -- one definition of the pinned
+      # trivy-action SHA, the trivy-db mirror list, and the timeout, shared with base-image-watch
+      # and rollback-latest's own gate, instead of 5 independently hand-copied blocks.
       - name: Scan -- observability pass (records UNFIXED findings; does NOT gate)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        uses: ./.github/actions/trivy-scan
         with:
           image-ref: ${{ env.IMAGE }}@${{ needs.build.outputs.digest }}
-          scanners: vuln
           format: sarif
           output: trivy-results.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: false
-          limit-severities-for-sarif: true
+          ignore-unfixed: "false"
+          limit-severities-for-sarif: "true"
           exit-code: "0"
-          trivyignores: .trivyignore
-        env:
-          # trivy-db is hosted on GHCR and ANONYMOUS pulls are rate-limited -- the known real
-          # failure mode. Authenticating with this repo's own token moves the pull off the
-          # shared anonymous bucket; the second entry is a fallback mirror, tried in order.
-          TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-          TRIVY_DB_REPOSITORY: "ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2"
-          TRIVY_TIMEOUT: "10m"
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Scan -- GATE (findings with a fix available)
         # `ignore-unfixed: true` is a policy call, not laziness. Measured on this exact base:
@@ -138,27 +139,24 @@ jobs:
         # Measured on a base only nine days stale: 3 fixable HIGH (openssl CVE-2026-14456).
         # The unfixed set is NOT hidden -- the pass above publishes it to the Security tab.
         # If this image ever gains a runtime dependency, re-evaluate: CONTRIBUTING step `B5`.
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        uses: ./.github/actions/trivy-scan
         with:
           image-ref: ${{ env.IMAGE }}@${{ needs.build.outputs.digest }}
-          scanners: vuln
           format: table
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
+          ignore-unfixed: "true"
           exit-code: "1"
-          trivyignores: .trivyignore
-          skip-db-update: true # reuse the DB the pass above fetched: one GHCR pull per run
-        env:
-          TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-          TRIVY_DB_REPOSITORY: "ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2"
-          TRIVY_TIMEOUT: "10m"
+          skip-db-update: "true" # reuse the DB the pass above fetched: one GHCR pull per run
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
 
       # `always()` so the full picture reaches the Security tab even when the gate above is red
       # -- that is exactly when someone needs to read it. Fork PRs carry a read-only token and
-      # cannot upload, so they are excluded rather than left to fail.
+      # cannot upload, so they are excluded rather than left to fail. `dependabot[bot]` gets the
+      # SAME read-only-token treatment as a fork even on a same-repo PR (see the `build` job's
+      # login step comment) -- excluded here too, or this step would itself red with a confusing
+      # permissions error on every Dependabot PR, indistinguishable from a real CVE-gate failure.
       - name: Publish to code scanning (never gates)
-        if: always() && (github.event_name == 'push' || github.event.pull_request.head.repo.fork == false)
+        if: always() && (github.event_name == 'push' || (github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]'))
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results.sarif
@@ -210,8 +208,32 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Resolve BEFORE the move so this run's own summary carries the "from" half of the audit
+      # trail -- previously only the new digest was ever recorded, so learning what production
+      # was serving a moment earlier meant querying GHCR's package-version history after the fact.
+      # `|| echo none` covers the very first promote, when `:latest` doesn't exist yet.
+      - name: Resolve the current :latest digest (for the audit trail)
+        id: previous
+        run: |
+          set -uo pipefail
+          d="$(docker buildx imagetools inspect "${IMAGE}:latest" --format '{{ .Manifest.Digest }}' 2>/dev/null || echo none)"
+          echo "digest=${d}" >> "$GITHUB_OUTPUT"
+
       - name: Move :latest to the already-verified digest (never a rebuild)
         run: |
           docker buildx imagetools create \
             -t "${IMAGE}:latest" \
             "${IMAGE}@${{ needs.build.outputs.digest }}"
+
+      - name: Promotion summary
+        if: always()
+        run: |
+          {
+            echo "### promote"
+            echo
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| :latest was | \`${{ steps.previous.outputs.digest }}\` |"
+            echo "| :latest now | \`${{ needs.build.outputs.digest }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -191,9 +191,14 @@ Entrypoint resolution, transport plumbing, `Dockerfile`, CI config. Image-repo-o
 - [ ] **`B4` — One-time, on the first Dependabot run:** confirm the `ignore` rules in
       `.github/dependabot.yml` suppress a 3.13 proposal but do **not** suppress digest-only updates
       of the pinned `3.12-slim` tag. (`version-update:semver-*` governs version changes, and a
-      digest-only update carries none — but verify rather than assume.) Also confirm the `build`
-      job's `packages: write` actually takes effect under Dependabot's restricted token; if it does
-      not, the PR reds for a permissions reason and the fix is a workflow change, not a re-run.
+      digest-only update carries none — but verify rather than assume.) The `build` job's
+      `packages: write` does **not** take effect under Dependabot's restricted token — GitHub
+      forces `GITHUB_TOKEN` read-only (and withholds secrets) on any `pull_request` run whose
+      actor is `dependabot[bot]`, the same treatment a fork PR gets, even though the PR is
+      same-repo. `build`'s login step reads `secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN`
+      for exactly this reason: create a PAT with `write:packages`, add it as a Dependabot secret
+      named `GHCR_PUSH_TOKEN` (Settings → Secrets and variables → Dependabot), and confirm a real
+      Dependabot PR's `build` job goes green with it in place.
 
 - [ ] **`B5` — If this image ever gains a runtime dependency** (today it has none — no
       `pip install`, an ADR-P041 MUST NOT), do all three: re-evaluate `ignore-unfixed: true` in the
@@ -261,9 +266,9 @@ Named Residual leaves open, since the host consumes `:latest`):
      --jq '.[] | {digest: .name, tags: .metadata.container.tags, created: .created_at}' | head -40
    ```
 2. **Actions → rollback-latest → Run workflow** with that digest and a reason
-   (`.github/workflows/rollback-latest.yml`). It re-runs the full smoke test against the digest
-   *before* moving the tag, so ADR-P041's "only from an already-verified digest" holds on the
-   emergency path too.
+   (`.github/workflows/rollback-latest.yml`). It re-runs the full smoke test **and** the same
+   fixable-CVE Trivy gate `verify` runs, against the digest, *before* moving the tag, so
+   ADR-P041's "only from an already-verified digest" holds on the emergency path too.
 3. Because the host consumes the tag, `:latest` moving back **is** the production rollback — no
    coordinated two-repo release.
 4. Open an issue against the bad digest. A rollback with no follow-up becomes a permanent pin

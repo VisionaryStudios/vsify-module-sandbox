@@ -1,0 +1,69 @@
+name: trivy-scan
+description: >
+  Shared Trivy vulnerability scan against a pinned image digest -- the pinned trivy-action SHA,
+  the trivy-db mirror list, and the timeout previously lived as 4 separately hand-copied blocks
+  across build-verify-promote.yml and base-image-watch.yml (plus a 5th added for
+  rollback-latest.yml's rollback-target gate). One definition means a future SHA bump, mirror-URL
+  change, or timeout tweak can no longer be applied to one copy and missed in another.
+
+inputs:
+  image-ref:
+    description: "<registry>/<repo>@sha256:<digest> -- always a digest, never a tag"
+    required: true
+  format:
+    description: "sarif (non-gating, includes unfixed) or table (the gate)"
+    required: true
+  output:
+    description: "Output file path. Leave empty for a table pass (prints to the job log)."
+    required: false
+    default: ""
+  severity:
+    required: false
+    default: "CRITICAL,HIGH"
+  ignore-unfixed:
+    description: "true for the GATE pass (fixable-only); false for the full-picture SARIF pass"
+    required: false
+    default: "false"
+  exit-code:
+    description: "1 to gate the job on findings; 0 to record without gating"
+    required: false
+    default: "0"
+  skip-db-update:
+    description: "true to reuse the DB an earlier pass in the same job already fetched"
+    required: false
+    default: "false"
+  limit-severities-for-sarif:
+    required: false
+    default: "false"
+  trivyignores:
+    required: false
+    default: ".trivyignore"
+  registry-username:
+    description: "Passed through explicitly -- a composite action does not inherit the caller's secrets context"
+    required: true
+  registry-password:
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        image-ref: ${{ inputs.image-ref }}
+        scanners: vuln
+        format: ${{ inputs.format }}
+        output: ${{ inputs.output }}
+        severity: ${{ inputs.severity }}
+        ignore-unfixed: ${{ inputs.ignore-unfixed }}
+        exit-code: ${{ inputs.exit-code }}
+        skip-db-update: ${{ inputs.skip-db-update }}
+        limit-severities-for-sarif: ${{ inputs.limit-severities-for-sarif }}
+        trivyignores: ${{ inputs.trivyignores }}
+      env:
+        # trivy-db is hosted on GHCR and ANONYMOUS pulls are rate-limited -- the known real
+        # failure mode. Authenticating moves the pull off the shared anonymous bucket; the second
+        # entry is a fallback mirror, tried in order.
+        TRIVY_USERNAME: ${{ inputs.registry-username }}
+        TRIVY_PASSWORD: ${{ inputs.registry-password }}
+        TRIVY_DB_REPOSITORY: "ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2"
+        TRIVY_TIMEOUT: "10m"

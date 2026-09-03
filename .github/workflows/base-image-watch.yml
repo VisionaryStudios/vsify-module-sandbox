@@ -33,7 +33,8 @@ permissions:
   contents: read
 
 env:
-  IMAGE: ghcr.io/visionarystudios/vsify-module-sandbox
+  # Sourced from the repo variable `vars.IMAGE` -- see build-verify-promote.yml's env block for why.
+  IMAGE: ${{ vars.IMAGE }}
   BASE_TAG: python:3.12-slim
 
 jobs:
@@ -48,7 +49,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
 
+      # NOTE: this step reports its verdict via `pin.outputs.status` instead of `exit 1` on a
+      # drifted/no-PR/stale-PR finding. Exiting here used to skip every later step -- including
+      # the promoted-image CVE re-scan below, which is this job's OTHER, independent purpose --
+      # exactly when the docker ecosystem is broken (the scenario this step itself detects). The
+      # final "Watch verdict" step aggregates this output with the CVE gate's outcome and is what
+      # actually fails the job, so a stale pin no longer silently suppresses the CVE re-scan.
       - name: Is the pin stale -- and did Dependabot notice?
+        id: pin
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -66,6 +74,7 @@ jobs:
 
           if [ "${pinned}" = "${live}" ]; then
             echo "| verdict | current |" >> "$GITHUB_STEP_SUMMARY"
+            echo "status=current" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -75,7 +84,8 @@ jobs:
           if [ "$(jq 'length' <<<"${prs}")" -eq 0 ]; then
             echo "| verdict | **DRIFTED, and Dependabot opened NO PR** |" >> "$GITHUB_STEP_SUMMARY"
             echo "::error::Base pin is stale and no Dependabot PR exists. The docker ecosystem is not producing updates. Check Insights > Dependency graph > Dependabot for the last run and its error, and confirm the FROM line still carries BOTH a tag and a digest."
-            exit 1
+            echo "status=drifted_no_pr" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           jq -r '.[] | "| open Dependabot PR | #\(.number) \(.title) — \(.createdAt) |"' \
@@ -87,9 +97,11 @@ jobs:
 
           if [ "${age}" -gt 14 ]; then
             echo "::error::Base pin is stale and the oldest Dependabot PR has been unreviewed for ${age} days. Review debt on the base image is the same exposure as having no Dependabot at all."
-            exit 1
+            echo "status=drifted_stale_pr" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           echo "::warning::Base pin is stale; a Dependabot PR is open (${age}d) and unmerged."
+          echo "status=drifted_fresh_pr" >> "$GITHUB_OUTPUT"
 
       - uses: docker/login-action@v3
         with:
@@ -106,21 +118,15 @@ jobs:
           echo "| promoted \`:latest\` | \`${d}\` |" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Re-scan the PROMOTED image (SARIF, non-gating -- includes unfixed)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        uses: ./.github/actions/trivy-scan
         with:
           image-ref: ${{ env.IMAGE }}@${{ steps.promoted.outputs.digest }}
-          scanners: vuln
           format: sarif
           output: trivy-promoted.sarif
-          severity: CRITICAL,HIGH
-          limit-severities-for-sarif: true
+          limit-severities-for-sarif: "true"
           exit-code: "0"
-          trivyignores: .trivyignore
-        env:
-          TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-          TRIVY_DB_REPOSITORY: "ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2"
-          TRIVY_TIMEOUT: "10m"
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
 
       # A DISTINCT category from `verify`'s. "As running" and "as built" must not overwrite each
       # other -- the difference between them is the entire post-promotion signal.
@@ -131,19 +137,37 @@ jobs:
           sarif_file: trivy-promoted.sarif
           category: trivy-image-promoted
 
+      # `continue-on-error: true` -- a CVE-gate failure here must not skip the final "Watch
+      # verdict" step below, which is what actually fails the job. This mirrors the pin-status
+      # output above: report, don't short-circuit, so both independent checks always run and are
+      # combined into one verdict.
       - name: GATE -- fixable findings in the image production is running right now
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        id: gate
+        continue-on-error: true
+        uses: ./.github/actions/trivy-scan
         with:
           image-ref: ${{ env.IMAGE }}@${{ steps.promoted.outputs.digest }}
-          scanners: vuln
           format: table
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
+          ignore-unfixed: "true"
           exit-code: "1"
-          trivyignores: .trivyignore
-          skip-db-update: true
-        env:
-          TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-          TRIVY_DB_REPOSITORY: "ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2"
-          TRIVY_TIMEOUT: "10m"
+          skip-db-update: "true"
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Watch verdict
+        if: always()
+        run: |
+          set -uo pipefail
+          bad_pin="false"
+          case "${{ steps.pin.outputs.status }}" in
+            drifted_no_pr|drifted_stale_pr) bad_pin="true" ;;
+          esac
+          if [ "${{ steps.gate.outcome }}" = "failure" ]; then
+            echo "::error::Fixable CRITICAL/HIGH finding(s) in the promoted :latest image -- see the GATE step above."
+          fi
+          if [ "${bad_pin}" = "true" ]; then
+            echo "::error::Base pin verdict: ${{ steps.pin.outputs.status }} -- see the pin step above."
+          fi
+          if [ "${bad_pin}" = "true" ] || [ "${{ steps.gate.outcome }}" = "failure" ]; then
+            exit 1
+          fi
