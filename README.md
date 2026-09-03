@@ -29,7 +29,18 @@ The module itself is always bind-mounted read-only at `/module/entrypoint` by th
 
 ## CI
 
-`.github/workflows/build-verify-promote.yml`: **build** (buildx, pushes to `ghcr.io/visionarystudios/vsify-module-sandbox:sha-<gitsha>` only, never `:latest`) → **verify** (pulls by digest, runs the conformance suite against both transports × both entrypoint kinds, asserts non-root/read-only/network-none) → **promote** (only on a green verify: moves `:latest` to the already-verified digest via `docker buildx imagetools create` — never a rebuild-to-promote, so a failed pipeline can never move the tag). Publishes using this repo's own automatic `GITHUB_TOKEN` (`permissions: packages: write`) — no shared App token.
+`.github/workflows/build-verify-promote.yml`: **build** (buildx, pushes to `ghcr.io/visionarystudios/vsify-module-sandbox:sha-<gitsha>` only, never `:latest`) → **verify** (pulls by digest, runs the conformance suite against both transports × both entrypoint kinds, asserts non-root/read-only/network-none, then Trivy-scans that same digest and fails on any CRITICAL/HIGH **with a fix available**) → **promote** (only on a green verify: moves `:latest` to the already-verified digest via `docker buildx imagetools create` — never a rebuild-to-promote, so a failed pipeline can never move the tag). Publishes using this repo's own automatic `GITHUB_TOKEN` (`permissions: packages: write`) — no shared App token.
+
+The base image is **digest-pinned** (`python:3.12-slim@sha256:…`, the multi-arch index digest) and
+watched by `.github/dependabot.yml` across the `docker` and `github-actions` ecosystems. The pin is
+not a style choice: Dependabot compares tag strings, so a floating tag never surfaces an upstream
+security republish of the same tag — and it cannot resolve an `ARG`-indirected `FROM` at all.
+
+`.github/workflows/base-image-watch.yml` runs weekly and reds if the pin has drifted from upstream
+with no Dependabot PR behind it (the ecosystem is broken, not merely idle), or if the image
+`:latest` currently points at has acquired a fixable CRITICAL/HIGH since it was built.
+`.github/workflows/rollback-latest.yml` re-verifies a prior digest and repoints `:latest` without a
+rebuild.
 
 ## Development
 
@@ -39,3 +50,10 @@ pytest tests/
 ruff check .
 docker build -t vsify-module-sandbox:local .
 ```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) before changing the wire format or the base image. It holds
+the two cross-repo checklists — `W1`–`W9` for a `schemas/SANDBOX_WIRE.json` change (which must land
+byte-identically in both repositories, and which nothing copies automatically) and `B1`–`B6` for the
+base-image pin, the vulnerability gate, and its bounded escape hatch.
