@@ -1,0 +1,90 @@
+name: rollback-latest
+
+# EMERGENCY ROLLBACK. Moves `:latest` back to a PREVIOUSLY BUILT digest, re-running the full smoke
+# test against that digest FIRST -- so ADR-P041's invariant (":latest moves ONLY from an
+# already-verified digest; a failed pipeline can never move the tag") holds on the emergency path
+# exactly as it does on `promote`. This workflow NEVER builds.
+#
+# Why a workflow rather than a laptop one-liner: `docker buildx imagetools create` locally needs a
+# PAT carrying packages:write, which nobody should be holding during an incident. Here the repo's
+# own GITHUB_TOKEN does it, the smoke test re-runs first, and the reason is recorded in the run
+# summary as a durable audit trail.
+#
+# WORTH KNOWING: the host repo pins `:latest`, not a digest (ADR-P041 Named Residual), so moving
+# this tag back IS the production rollback -- no coordinated two-repo release is required.
+
+on:
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: "sha256:... to point :latest at (from a previous green run or a sha-<gitsha> tag)"
+        required: true
+      reason:
+        description: "Why -- recorded in the run summary as the durable audit trail"
+        required: true
+
+env:
+  IMAGE: ghcr.io/visionarystudios/vsify-module-sandbox
+
+jobs:
+  reverify-and-move:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Dispatch inputs reach the shell through `env:`, never interpolated into a run body --
+      # a `${{ inputs.x }}` spliced directly into a script is a script-injection sink even when
+      # only writers can dispatch.
+      - name: Refuse anything that is not a digest
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$DIGEST" | grep -qE '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::not a sha256 digest: ${DIGEST}"
+            exit 1
+          fi
+
+      - name: Re-verify BEFORE the tag moves
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          set -euo pipefail
+          docker pull "${IMAGE}@${DIGEST}"
+          python3 scripts/smoke_test.py "${IMAGE}@${DIGEST}"
+
+      - name: Move :latest (imagetools only -- never a rebuild)
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create -t "${IMAGE}:latest" "${IMAGE}@${DIGEST}"
+
+      - name: Record it
+        if: always()
+        env:
+          DIGEST: ${{ inputs.digest }}
+          REASON: ${{ inputs.reason }}
+          ACTOR: ${{ github.actor }}
+          OUTCOME: ${{ job.status }}
+        run: |
+          {
+            echo "### rollback"
+            echo
+            echo "- digest: \`${DIGEST}\`"
+            echo "- reason: ${REASON}"
+            echo "- actor: ${ACTOR}"
+            echo "- outcome: ${OUTCOME}"
+          } >> "$GITHUB_STEP_SUMMARY"

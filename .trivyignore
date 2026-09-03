@@ -1,0 +1,20 @@
+# ADR-P041 supply-chain gate — the BOUNDED escape hatch (issue #354).
+#
+# For exactly one situation: a FIXABLE CRITICAL/HIGH lands in the base image and an urgent,
+# unrelated change must ship before the base-digest bump can be built and smoke-tested.
+#
+# It is a DELAY, never a waiver. The real remedy is almost always one Dependabot merge away.
+#
+# RULES — mechanised by tests/test_trivyignore_policy.py, which runs in the existing `test` job:
+#   1. Every entry carries `exp:YYYY-MM-DD`. Trivy itself stops honouring the line on that date,
+#      so a forgotten suppression re-reddens `verify` instead of quietly becoming permanent.
+#   2. The expiry is at most 30 days out.
+#   3. A `# why:` line naming a tracking issue sits directly above the entry.
+#   4. Every active entry is printed into the `verify` job summary on EVERY run, so a live bypass
+#      is visible to anyone reading a build — not only to someone who thinks to open this file.
+#
+# Format:
+#   # why: blocks the v0.2.0 entrypoint hotfix; base bump tracked in #NNN
+#   CVE-2026-14456 exp:2026-09-30
+#
+# (No active suppressions.)

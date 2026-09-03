@@ -1,0 +1,149 @@
+name: base-image-watch
+
+# Two failure modes the build pipeline structurally CANNOT see, closed by one file.
+#
+#   1. THE PIN GOES STALE AND NOBODY NOTICES. A repo with no commits has a permanently green CI
+#      and an arbitrarily old base image. Worse, a misconfigured docker ecosystem looks exactly
+#      like a healthy one from inside the repo -- which is not hypothetical here: the previous
+#      `ARG BASE_IMAGE` indirection made Dependabot a silent no-op, and nothing surfaced it.
+#      So this job MEASURES the pin against the live upstream index digest and then asks whether
+#      Dependabot actually opened a PR. Its health is judged by OUTCOME, never assumed from the
+#      presence of a config file.
+#
+#   2. THE PROMOTED IMAGE ROTS AFTER PROMOTION. `verify` scans at build time, but `:latest` serves
+#      production until the next promote -- which, on a 15-file repo, may be months. A CVE
+#      disclosed the day after promotion is otherwise invisible. This re-scans what `:latest`
+#      ACTUALLY points at, fixed-only, so it reddens exactly when a remedy exists. Measured
+#      precedent: a python:3.12-slim only nine days stale already carried 3 fixable HIGH
+#      (openssl CVE-2026-14456).
+#
+# KNOWN LIMIT, stated rather than papered over: GitHub disables scheduled workflows after 60 days
+# of repository inactivity -- which this repo can plausibly reach, and which is exactly the quiet
+# period this job exists to cover. Dependabot's own branch pushes count as activity, so in practice
+# the two mechanisms keep each other alive; but if BOTH stop, the silence is indistinguishable from
+# health. Closing that needs an out-of-repo monitor, which is disproportionate here and is accepted
+# as a residual.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC, just after Dependabot's own 06:00 window
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/visionarystudios/vsify-module-sandbox
+  BASE_TAG: python:3.12-slim
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Is the pin stale -- and did Dependabot notice?
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          pinned="$(grep -m1 -oE 'sha256:[0-9a-f]{64}' Dockerfile)"
+          live="$(docker buildx imagetools inspect "${BASE_TAG}" --format '{{ .Manifest.Digest }}')"
+          {
+            echo "### base-image pin"
+            echo
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| pinned | \`${pinned}\` |"
+            echo "| upstream \`${BASE_TAG}\` | \`${live}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${pinned}" = "${live}" ]; then
+            echo "| verdict | current |" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          prs="$(gh pr list --repo "${GITHUB_REPOSITORY}" --state open \
+                   --search 'author:app/dependabot' --json number,title,createdAt)"
+
+          if [ "$(jq 'length' <<<"${prs}")" -eq 0 ]; then
+            echo "| verdict | **DRIFTED, and Dependabot opened NO PR** |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Base pin is stale and no Dependabot PR exists. The docker ecosystem is not producing updates. Check Insights > Dependency graph > Dependabot for the last run and its error, and confirm the FROM line still carries BOTH a tag and a digest."
+            exit 1
+          fi
+
+          jq -r '.[] | "| open Dependabot PR | #\(.number) \(.title) — \(.createdAt) |"' \
+            <<<"${prs}" >> "$GITHUB_STEP_SUMMARY"
+
+          oldest="$(jq -r 'min_by(.createdAt).createdAt' <<<"${prs}")"
+          age=$(( ( $(date -u +%s) - $(date -u -d "${oldest}" +%s) ) / 86400 ))
+          echo "| oldest PR age | ${age}d |" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${age}" -gt 14 ]; then
+            echo "::error::Base pin is stale and the oldest Dependabot PR has been unreviewed for ${age} days. Review debt on the base image is the same exposure as having no Dependabot at all."
+            exit 1
+          fi
+          echo "::warning::Base pin is stale; a Dependabot PR is open (${age}d) and unmerged."
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve what :latest actually points at right now
+        id: promoted
+        run: |
+          set -euo pipefail
+          d="$(docker buildx imagetools inspect "${IMAGE}:latest" --format '{{ .Manifest.Digest }}')"
+          echo "digest=${d}" >> "$GITHUB_OUTPUT"
+          echo "| promoted \`:latest\` | \`${d}\` |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Re-scan the PROMOTED image (SARIF, non-gating -- includes unfixed)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ steps.promoted.outputs.digest }}
+          scanners: vuln
+          format: sarif
+          output: trivy-promoted.sarif
+          severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
+          exit-code: "0"
+          trivyignores: .trivyignore
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          TRIVY_DB_REPOSITORY: "ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2"
+          TRIVY_TIMEOUT: "10m"
+
+      # A DISTINCT category from `verify`'s. "As running" and "as built" must not overwrite each
+      # other -- the difference between them is the entire post-promotion signal.
+      - name: Publish as-running results (distinct category from as-built)
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-promoted.sarif
+          category: trivy-image-promoted
+
+      - name: GATE -- fixable findings in the image production is running right now
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ steps.promoted.outputs.digest }}
+          scanners: vuln
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          trivyignores: .trivyignore
+          skip-db-update: true
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          TRIVY_DB_REPOSITORY: "ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2"
+          TRIVY_TIMEOUT: "10m"

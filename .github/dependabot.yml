@@ -1,0 +1,65 @@
+# Supply-chain freshness for the two things this repo actually depends on and cannot observe
+# drifting from inside (issue #352).
+#
+# WHY THE BASE IS DIGEST-PINNED (the enabling change, see Dockerfile's header): Dependabot's
+# docker updater reads the literal `FROM` line and compares TAG STRINGS. Against the previous
+# `ARG BASE_IMAGE=...` + `FROM ${BASE_IMAGE}` it resolved nothing at all (dependabot-core #4597 /
+# #10190, both closed NOT PLANNED), and against a bare floating tag it would resolve the tag but
+# never see an in-place republish — which is precisely the event this config exists to catch.
+# `python:3.12-slim@sha256:...` is the only shape where an upstream security rebuild becomes a PR.
+#
+# Every bump lands as a PR that runs the full test -> build -> verify pipeline: the proposed base
+# is smoke-tested against both transports and both entrypoint kinds, and Trivy-scanned, before
+# anyone merges it. `promote` is push-to-main-only, so a Dependabot PR can never move `:latest`
+# on its own.
+version: 2
+
+updates:
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    labels: ["dependencies"]
+    commit-message:
+      # ADR-G001's eight-type vocabulary. A base rebase is maintenance, not a `fix:`/`feat:` that
+      # should imply a version bump.
+      prefix: "chore"
+    ignore:
+      # ADR-P041 states the base NORMATIVELY as `python:3.12-slim`. A bot PR moving to 3.13-slim
+      # is an ADR violation proposed by a machine and reviewed under time pressure — refuse it at
+      # the config layer rather than relying on a reviewer to catch it.
+      #
+      # These rules do NOT suppress the updates this file exists for: `version-update:semver-*`
+      # governs VERSION changes, and a digest-only update of the same pinned tag carries no semver
+      # change, so it still flows through. Changing the TAG is an ADR amendment (step `B1`), never
+      # a Dependabot merge.
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    labels: ["dependencies"]
+    commit-message:
+      # Workflow / pipeline config — ADR-G001 routes this to `ci:`, not `chore:`.
+      prefix: "ci"
+    groups:
+      # One PR for the whole action set rather than six. These bumps are reviewed together or not
+      # at all, and six simultaneous PRs on a repo this size is how review debt starts.
+      actions:
+        patterns: ["*"]
+    # Deliberately NO `ignore` here. `aquasecurity/trivy-action` publishes no moving major tag —
+    # it is SHA-pinned to an exact release in build-verify-promote.yml, so without this ecosystem
+    # that pin is frozen forever. Advancing it is the specific gap this entry closes; keeping the
+    # actions/* and docker/* pins current is the secondary benefit.
