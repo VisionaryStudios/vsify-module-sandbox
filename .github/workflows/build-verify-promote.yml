@@ -175,7 +175,9 @@ jobs:
           sbom: true
 
   verify:
-    needs: build
+    # mirror-guard is listed DIRECTLY, not just reached through build: a job can read only the
+    # outputs of jobs in its own `needs:`, and the channel gate below reads `channel`.
+    needs: [mirror-guard, build]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -201,6 +203,15 @@ jobs:
         run: docker pull "${IMAGE}@${{ needs.build.outputs.digest }}"
       - name: Real end-to-end smoke test (native Linux Docker -- unix_socket works here)
         run: python3 scripts/smoke_test.py "${IMAGE}@${{ needs.build.outputs.digest }}"
+
+      # The .trivyignore escape hatch is rc-only (issue #628, ADR-P041 v1.8). A GA tag fails here
+      # while any suppression is active, BEFORE the scan below could honour it. Deterministic like
+      # the smoke test, so it runs after it and ahead of the feed-dependent scans. An empty or
+      # unknown channel fails closed.
+      - name: Channel gate -- GA refuses every .trivyignore suppression
+        env:
+          CHANNEL: ${{ needs.mirror-guard.outputs.channel }}
+        run: python3 scripts/trivyignore_channel_gate.py "$CHANNEL" .trivyignore
 
       # ---- ADR-P041 supply-chain gate (issue #354) ---------------------------------------
       # Scans the SAME digest `docker pull` fetched, the smoke test exercised, and `promote`
@@ -284,6 +295,7 @@ jobs:
             echo
             echo "| field | value |"
             echo "|---|---|"
+            echo "| channel | \`${{ needs.mirror-guard.outputs.channel }}\` |"
             echo "| image digest | \`${{ needs.build.outputs.digest }}\` |"
             echo "| base pin | \`$(grep -m1 '^FROM ' Dockerfile | sed -e 's/^FROM //' -e 's/ AS .*$//')\` |"
             echo "| gate | CRITICAL,HIGH with a fix available |"
@@ -293,7 +305,7 @@ jobs:
               grep -vE '^[[:space:]]*(#|$)' .trivyignore \
                 | while IFS= read -r suppression; do printf -- "- \`%s\`\n" "$suppression"; done
               echo
-              echo "> A suppression is a DELAY, not a waiver -- each expires on its \`exp:\` date."
+              echo "> A suppression is a DELAY, not a waiver -- each expires on its \`exp:\` date, and a GA build refuses it."
             else
               echo "- none"
             fi

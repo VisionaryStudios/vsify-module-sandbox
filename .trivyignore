@@ -1,20 +1,30 @@
-# ADR-P041 supply-chain gate — the BOUNDED escape hatch (issue #354).
+# ADR-P041 supply-chain gate — the BOUNDED, rc-ONLY escape hatch (issues #354, #628; ADR-P041 v1.8).
 #
-# For exactly one situation: a FIXABLE CRITICAL/HIGH lands in the base image and an urgent,
-# unrelated change must ship before the base-digest bump can be built and smoke-tested.
+# For exactly one situation: a FIXABLE CRITICAL/HIGH lands in the base image, the fixed base is not
+# published upstream yet (or not yet built and smoke-tested), and a prerelease must still ship.
 #
 # It is a DELAY, never a waiver. The real remedy is almost always one Dependabot merge away.
 #
-# RULES — mechanised by tests/test_trivyignore_policy.py, which runs in the existing `test` job:
+# RULES:
 #   1. Every entry carries `exp:YYYY-MM-DD`. Trivy itself stops honouring the line on that date,
 #      so a forgotten suppression re-reddens `verify` instead of quietly becoming permanent.
-#   2. The expiry is at most 30 days out.
-#   3. A `# why:` line naming a tracking issue sits directly above the entry.
-#   4. Every active entry is printed into the `verify` job summary on EVERY run, so a live bypass
+#   2. The expiry is at most `_MAX_DAYS` out (7), inclusive. Mechanised by
+#      tests/test_trivyignore_policy.py, a form check that cannot see the channel, so the cap is
+#      the same for every build.
+#   3. A `# why:` line naming a tracking issue sits directly above the entry (same test).
+#   4. PRERELEASE ONLY. On a GA tag, `verify` fails while ANY line here is active
+#      (scripts/trivyignore_channel_gate.py). GA's only remedy is the base bump.
+#   5. Every active entry is printed into the `verify` job summary on EVERY run, so a live bypass
 #      is visible to anyone reading a build — not only to someone who thinks to open this file.
 #
-# Format:
-#   # why: blocks the v0.2.0 entrypoint hotfix; base bump tracked in #NNN
-#   CVE-2026-14456 exp:2026-09-30
+# Side effect while an entry is live: sandbox-base-image-watch.yml scans with this same file, so
+# the release watch does not alarm on a suppressed CVE either.
 #
-# (No active suppressions.)
+# Format:
+#   # why: <reason>; base bump tracked in #NNN
+#   CVE-YYYY-NNNNN exp:YYYY-MM-DD
+
+# why: openssl QUIC DoS, fixed in 3.5.7-1~deb13u3, absent from every python:3.12-slim digest; bump tracked in #629
+CVE-2026-75804 exp:2026-10-07
+# why: openssl info disclosure, fixed in 3.5.7-1~deb13u3, absent from every python:3.12-slim digest; bump tracked in #629
+CVE-2026-84782 exp:2026-10-07

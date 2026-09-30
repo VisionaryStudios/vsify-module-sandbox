@@ -66,6 +66,13 @@ jobs:
           docker pull "${IMAGE}@${DIGEST}"
           python3 scripts/smoke_test.py "${IMAGE}@${DIGEST}"
 
+      # The .trivyignore escape hatch is rc-only (issue #628, ADR-P041 v1.8), and `:latest` is the
+      # GA tag, so this path's channel is always `ga`. The scan below reads the same .trivyignore;
+      # without this step a rollback during a live rc suppression would move :latest past a CVE
+      # the promote path refuses.
+      - name: Channel gate -- :latest is GA, so it refuses every .trivyignore suppression
+        run: python3 scripts/trivyignore_channel_gate.py ga .trivyignore
+
       # Same "GATE -- fixable findings" pass build-verify-promote.yml runs before `promote` moves
       # :latest -- the smoke test above only re-verifies functional correctness, not CVE status.
       # Without this, an operator could roll back to a digest that now carries a fixable

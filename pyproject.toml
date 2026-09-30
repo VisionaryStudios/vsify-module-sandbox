@@ -5,7 +5,9 @@ description = "Sandbox execution image for vsify-enterprise-mcp signed-quarantin
 requires-python = ">=3.12"
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
+# `tests` so a test can `from conftest import load_script_module` under any import mode, not
+# only as a side effect of the default prepend mode (same reason as the framework's pyproject).
+pythonpath = [".", "tests"]
 testpaths = ["tests"]
 
 [tool.ruff]
