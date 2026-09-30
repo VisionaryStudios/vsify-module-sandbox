@@ -115,10 +115,11 @@ see.
          `version_mismatch` on any version that is not its own. A hard refusal.
       2. ADR-P041 rules a framing-version **handshake** explicitly out of scope, so there is no
          negotiation to fall back on.
-      3. The host's `ContainerIsolationBackend.default_image` is
-         `ghcr.io/visionarystudios/vsify-module-sandbox:latest` — an **unpinned, mutable tag**.
-         (A `SandboxSpec` *may* carry its own `image` and pin itself; the shipped default does
-         not.)
+      3. The host's `ContainerIsolationBackend.default_image` is its own release's tag,
+         `ghcr.io/visionarystudios/vsify-module-sandbox:<framework-version>` (ADR-P048 v1.6) — so
+         a host and the image built alongside it move together. An operator override
+         (`default_image=` or `SandboxSpec.image`) can still name another image, and a flag-day
+         wire change breaks every host whose override names an image on the other side of it.
 
       So promoting a new image instantly breaks every host on the default path, and landing the
       new host first breaks it against the still-promoted old image. **There is no merge order
@@ -289,8 +290,11 @@ ever a pointer.
 **A Dependabot digest bump that breaks the smoke test cannot reach production** — `verify` reds on
 the PR, the PR does not merge, `promote` never runs.
 
-**A promoted image that misbehaves** (green verify, behavioural regression — the case ADR-P041's
-Named Residual leaves open, since the host consumes `:latest`):
+**A promoted image that misbehaves** (green verify, behavioural regression). Since ADR-P048 v1.6
+hosts run their own release's `:<framework-version>` tag, not `:latest`, so moving `:latest` back
+only affects humans and hosts that explicitly override to it. For a host on the default, the
+rollback lever is `default_image=` pinned to the last-good digest (it logs no boot notice when
+digest-pinned), or a release carrying a fixed image. For `:latest` itself:
 
 1. Find the last-good digest:
    ```bash
@@ -301,8 +305,8 @@ Named Residual leaves open, since the host consumes `:latest`):
    (`.github/workflows/rollback-latest.yml`). It re-runs the full smoke test **and** the same
    fixable-CVE Trivy gate `verify` runs, against the digest, *before* moving the tag, so
    ADR-P041's "only from an already-verified digest" holds on the emergency path too.
-3. Because the host consumes the tag, `:latest` moving back **is** the production rollback — no
-   coordinated two-repo release.
+3. `:latest` moving back rolls back only consumers of `:latest` — hosts on the default are pinned to
+   their release's tag and need the `default_image=` digest pin above.
 4. Open an issue against the bad digest. A rollback with no follow-up becomes a permanent pin
    nobody remembers making.
 

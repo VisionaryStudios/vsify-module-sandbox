@@ -47,6 +47,6 @@ migration**.
 | image-repo path | now |
 |---|---|
 | `schemas/SANDBOX_WIRE.json` | **Dropped.** The host's `schemas/SANDBOX_WIRE.json` is the single source (it was byte-identical at migration, sha256 `40d5b802…9316`). The mirror receives a copy rendered from it (ADR-P048 §2). `vsify-enterprise-mcp:tests/test_sandbox_tree_provenance.py` refuses a copy under `sandbox/`. |
-| `.github/dependabot.yml` | Its docker entry moved to the host's `.github/dependabot.yml`, directory `/sandbox` (ADR-P048 §9). |
+| `.github/dependabot.yml` | Both of its entries moved to the host's `.github/dependabot.yml` (ADR-P048 §9): `docker` at directory `/sandbox`, and `github-actions` at `/sandbox` (workflow files) + `/sandbox/.github/actions/trivy-scan` (composite action). The `github-actions` entry was left behind at first and restored in ADR-P048 v1.4. |
 | `.github/workflows/base-image-watch.yml` | Ported to the host as `.github/workflows/sandbox-base-image-watch.yml`, watching `sandbox/Dockerfile` (ADR-P048 §9). |
 | `README.md`, `.gitignore`, `.github/PULL_REQUEST_TEMPLATE.md` | Mirror-repo presentation, owned by the mirror render (with its DO-NOT-EDIT banner), not by this source tree. |
