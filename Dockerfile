@@ -35,7 +35,7 @@
 # a `FROM ... AS builder` stage plus one `COPY --from=builder` lands above it without touching the
 # WORKDIR/COPY/USER/ENTRYPOINT lines below, and with no change to build → verify → promote (which
 # is keyed on the pushed digest, never on this file's internal shape). See step `B5`.
-FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea AS runtime
+FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f AS runtime
 
 WORKDIR /app
 COPY --chown=65534:65534 vsify_sandbox/ /app/vsify_sandbox/
