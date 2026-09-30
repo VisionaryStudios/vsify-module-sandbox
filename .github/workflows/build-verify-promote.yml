@@ -1,14 +1,30 @@
 name: build-verify-promote
 
-# ADR-P041: build -> verify (by digest) -> promote. :latest moves ONLY via `docker buildx
-# imagetools create` from an already-verified digest -- never a rebuild-to-promote, so a failed
-# pipeline can never move the tag. Publishes with this repo's OWN automatic GITHUB_TOKEN
-# (permissions: packages: write) -- no shared App token (vsify-release-bot never carries
-# administration/packages scope anywhere in the org's tooling; confirmed during this ADR's design).
+# ADR-P041: build -> verify (by digest) -> promote. Tags move ONLY via `docker buildx imagetools
+# create` from an already-verified digest -- never a rebuild-to-promote, so a failed pipeline can
+# never move a tag. Publishes with this repo's OWN automatic GITHUB_TOKEN (permissions: packages:
+# write) -- no shared App token (vsify-release-bot never carries administration/packages scope
+# anywhere in the org's tooling; ADR-P048 §3 is the canonical home of that fact).
+#
+# THIS REPOSITORY IS A GENERATED MIRROR (ADR-P048 §1-§2). Its canonical source is `sandbox/` in
+# VisionaryStudios/vsify-enterprise-mcp, whose release workflow publishes it here on every
+# framework release -- an immutable tag named exactly as the framework tag, an advance of `rc`, and
+# on GA only a fast-forward of `main` -- with a Release App token, so the tag push DOES trigger this
+# workflow (a push made with this repo's own GITHUB_TOKEN would not). That tag push is the ONLY
+# build trigger. Each run builds `:<version>` (the tag without its leading `v` -- the SemVer
+# spelling, never PEP 440, ADR-P048 §4), and moves `:latest` on a GA-shaped tag only (§5). The
+# framework's own `verify-sandbox-image` job polls for `:<version>` and reddens its release run if
+# this pipeline never produces it (§6).
+#
+# A re-publish of the same release is a no-op on the framework side and pushes nothing, so it never
+# builds a second, different image under one tag. To retry a transient failure here (a GHCR or
+# trivy-db outage), re-run this workflow's failed jobs from the tag's own run.
 
 on:
   push:
-    branches: [main]
+    tags: ["v*"]
+  # A pull request against a generated mirror is itself the divergence: the mirror guard refuses
+  # its merge commit (no publisher trailer), and nothing downstream of the guard runs.
   pull_request:
     branches: [main]
 
@@ -26,7 +42,96 @@ env:
   IMAGE: ${{ vars.IMAGE }}
 
 jobs:
+  # The mirror guard (ADR-P048 §1). Every tree this repository builds must be one the framework's
+  # publisher wrote: a commit carrying its `Framework-SHA:` trailer, reached through the immutable
+  # tag that trailer's `Framework-Tag:` names. A hand-edit -- a direct push, a merged PR, a
+  # hand-made tag -- lacks the trailer (or names a different tag) and is refused here, so it never
+  # becomes an image; the next framework publish then replaces the tree wholesale.
+  #
+  # A TRIPWIRE, NOT AN AUTHENTICATION BOUNDARY: anyone who can push can forge a trailer. The
+  # boundary is who holds push on this repository (the Release App and org administrators).
+  mirror-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.guard.outputs.version }}
+      channel: ${{ steps.guard.outputs.channel }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Refuse a commit the framework publisher did not write
+        id: guard
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          import sys
+
+          # Same names and grammar as vsify-enterprise-mcp's scripts/publish_scaffold_mirror.py,
+          # which this repository cannot import; a framework test runs this step against a tree
+          # that publisher actually wrote.
+          TRAILER_SHA = "Framework-SHA"
+          TRAILER_TAG = "Framework-Tag"
+          TAG_RE = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*))?\Z")
+          SHA_RE = re.compile(r"^[0-9a-f]{40}\Z")
+          TRAILER_RE = re.compile(r"^([A-Za-z][A-Za-z0-9-]*): (\S+)\s*$")
+          REMEDY = (
+              "This repository is GENERATED from vsify-enterprise-mcp's sandbox/ (ADR-P048); only a "
+              "commit its release publisher wrote is built. Land the change in the framework's "
+              "sandbox/ instead; it reaches this repository, and the image, on the next release."
+          )
+
+          result = subprocess.run(["git", "log", "-1", "--format=%H%x1f%B", "HEAD"], capture_output=True, text=True)
+          if result.returncode != 0:
+              print(f"::error title=Mirror guard::cannot read HEAD: {result.stderr.strip()[:200]!r}")
+              sys.exit(1)
+          commit, _, message = result.stdout.partition("\x1f")
+          # The LAST paragraph only, as git defines trailers: a trailer quoted in a body is prose.
+          paragraphs = [p for p in message.strip().split("\n\n") if p.strip()]
+          trailers = {}
+          for line in (paragraphs[-1].splitlines() if paragraphs else []):
+              match = TRAILER_RE.match(line)
+              if match:
+                  trailers[match.group(1)] = match.group(2)
+
+          failures = []
+          framework_sha = trailers.get(TRAILER_SHA, "")
+          if not SHA_RE.match(framework_sha):
+              failures.append(
+                  f"commit {commit[:12]} carries no valid {TRAILER_SHA}: trailer "
+                  f"(found {framework_sha[:60]!r}), so the framework publisher did not write it"
+              )
+          ref_type, ref_name = os.environ.get("REF_TYPE", ""), os.environ.get("REF_NAME", "")
+          if ref_type != "tag":
+              failures.append(f"this run is for a {ref_type or 'non-tag'} ref; only a published release tag is built")
+          elif not TAG_RE.match(ref_name):
+              failures.append(f"tag {ref_name[:60]!r} is not a framework release tag (vMAJOR.MINOR.PATCH[-prerelease])")
+          elif trailers.get(TRAILER_TAG) != ref_name:
+              failures.append(
+                  f"tag {ref_name} points at a commit whose {TRAILER_TAG}: trailer names "
+                  f"{trailers.get(TRAILER_TAG, '')[:60]!r}; the publisher always names the tag it creates"
+              )
+
+          if failures:
+              for failure in failures:
+                  print(f"::error title=Mirror guard::{failure}. {REMEDY}")
+              sys.exit(1)
+          version = ref_name[1:]
+          channel = "prerelease" if "-" in ref_name else "ga"
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"version={version}\nchannel={channel}\n")
+          print(f"::notice title=Mirror guard::{ref_name} is framework@{framework_sha[:12]}; building :{version} ({channel}).")
+          PY
+
   test:
+    needs: mirror-guard
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,7 +143,7 @@ jobs:
       - run: pytest tests/ -v
 
   build:
-    needs: test
+    needs: [mirror-guard, test]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -108,7 +213,7 @@ jobs:
       #
       # FAIL-CLOSED BY CONSTRUCTION. Trivy exits non-zero on any FATAL error -- a trivy-db fetch
       # failure, a GHCR rate limit, a timeout -- independently of `exit-code`. So an unreachable
-      # scanner reddens `verify`, and `promote`'s `needs: [build, verify]` skips it: the tag
+      # scanner reddens `verify`, and `promote`'s `needs:` on build and verify skips it: no tag
       # cannot move. The ONLY change that would make this gate fail OPEN is adding
       # `continue-on-error` to a scan step. Do not add it. (No `success()` is needed on
       # `promote`'s `if:` either -- a needs-failure already skips a job whose `if:` carries no
@@ -195,12 +300,18 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   promote:
-    needs: [build, verify]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [mirror-guard, build, verify]
+    # A guarded tag push only; `mirror-guard` already refused anything else, and `needs` skips this
+    # job whenever build or verify failed.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    env:
+      VERSION: ${{ needs.mirror-guard.outputs.version }}
+      CHANNEL: ${{ needs.mirror-guard.outputs.channel }}
+      DIGEST: ${{ needs.build.outputs.digest }}
     steps:
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -220,20 +331,38 @@ jobs:
           d="$(docker buildx imagetools inspect "${IMAGE}:latest" --format '{{ .Manifest.Digest }}' 2>/dev/null || echo none)"
           echo "digest=${d}" >> "$GITHUB_OUTPUT"
 
-      - name: Move :latest to the already-verified digest (never a rebuild)
+      # The co-versioned tag (ADR-P048 §4) -- what the framework release pins and polls for. Moved
+      # from the verified digest, exactly like :latest below, so a failed pipeline never publishes
+      # it. A retry of the same tag re-points it at the digest that retry verified.
+      - name: Tag the already-verified digest as :<version> (never a rebuild)
         run: |
-          docker buildx imagetools create \
-            -t "${IMAGE}:latest" \
-            "${IMAGE}@${{ needs.build.outputs.digest }}"
+          set -euo pipefail
+          docker buildx imagetools create -t "${IMAGE}:${VERSION}" "${IMAGE}@${DIGEST}"
+
+      # GA only (ADR-P048 §5): the same channel rule the framework applies to the mirror's `main`.
+      # `:latest` stays available to humans; the framework never depends on it.
+      - name: Move :latest to the already-verified digest (GA only, never a rebuild)
+        if: env.CHANNEL == 'ga'
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create -t "${IMAGE}:latest" "${IMAGE}@${DIGEST}"
 
       - name: Promotion summary
         if: always()
+        env:
+          PREVIOUS: ${{ steps.previous.outputs.digest }}
         run: |
           {
             echo "### promote"
             echo
             echo "| field | value |"
             echo "|---|---|"
-            echo "| :latest was | \`${{ steps.previous.outputs.digest }}\` |"
-            echo "| :latest now | \`${{ needs.build.outputs.digest }}\` |"
+            echo "| release | \`${VERSION}\` (${CHANNEL}) |"
+            echo "| :${VERSION} now | \`${DIGEST}\` |"
+            if [ "${CHANNEL}" = "ga" ]; then
+              echo "| :latest was | \`${PREVIOUS}\` |"
+              echo "| :latest now | \`${DIGEST}\` |"
+            else
+              echo "| :latest | unchanged (prerelease), still \`${PREVIOUS}\` |"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

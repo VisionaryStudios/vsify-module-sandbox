@@ -7,6 +7,12 @@ Dispatch env vars (all non-secret, set by ``ContainerIsolationBackend._build_ser
 - ``VSIFY_SANDBOX_ENTRYPOINT_KIND``: ``"script"`` | ``"python_module"`` (always set)
 - ``VSIFY_SANDBOX_ENTRYPOINT_MODULE``: the dotted ref (only set for ``python_module``)
 - ``VSIFY_SANDBOX_SOCKET``: the in-container socket path (only set for ``unix_socket``)
+- ``SANDBOX_EGRESS_ALLOW``: the claim's ``egress_allow``, comma-joined (only set with an allowlist)
+
+Before the module is imported, the egress shim (``egress_proxy.py``, ADR-P048 §7) is started on
+loopback and ``HTTP_PROXY``/``HTTPS_PROXY`` (both cases) are pointed at it, so every HTTP client the
+module constructs inherits a default-deny, per-claim proxy. A shim that cannot bind is a setup
+refusal like any other: the module is never imported with its egress unfiltered.
 
 The module to serve is ALWAYS bind-mounted read-only at ``/module/entrypoint`` by the host — this
 entrypoint never resolves a file path from the dotted ref itself (see ``entrypoint_resolve.py``'s
@@ -27,7 +33,7 @@ from importlib.machinery import SourceFileLoader
 from types import ModuleType
 from typing import Callable
 
-from . import framing
+from . import egress_proxy, framing
 from .entrypoint_resolve import EntrypointRefMalformed, validate_dotted_ref
 
 ENTRYPOINT_PATH = "/module/entrypoint"
@@ -154,9 +160,27 @@ def _serve_forever(channel, serve: Callable[[bytes], bytes]) -> None:
         channel.write(framing.encode_frame(framing.FRAME_RESPONSE, response, truncated=truncated))
 
 
+def _start_egress_shim() -> egress_proxy.EgressProxy:
+    """Start the egress shim and export its address to the module's environment (ADR-P048 §7).
+
+    ORDER is the security property: this runs before ``_load_serve_callable`` executes a single
+    line of module code, so a module's import-time HTTP calls are proxied too, and a bind failure
+    exits before the module exists at all. With no allowlist the container is also on
+    ``--network none`` (ADR-P017) and the shim is a deny-all listener: one loopback bind and one
+    daemon thread, so that path stays cheap.
+
+    Defence in depth, never the boundary: a module that ignores the proxy variables and opens a
+    raw socket is contained by the network posture, not by this."""
+    try:
+        return egress_proxy.install(os.environ)
+    except OSError as exc:
+        raise SetupError(f"egress_proxy_bind_failed:{type(exc).__name__}") from exc
+
+
 def main() -> int:
     transport = os.environ.get(_TRANSPORT_ENV, "")
     try:
+        _start_egress_shim()
         serve = _load_serve_callable()
         channel = _connect_channel(transport)
     except SetupError as exc:

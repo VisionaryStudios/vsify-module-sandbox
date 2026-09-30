@@ -15,6 +15,32 @@ checklists below are for.
 
 ---
 
+## Where this source lives (ADR-P048)
+
+**This tree is edited in exactly one place: `vsify-enterprise-mcp:sandbox/`.** Since ADR-P048 §1
+(`vsify-enterprise-mcp:docs/architecture/decisions/platform/ADR-P048-sandbox-co-versioning.md`)
+the `vsify-module-sandbox` repository is a generated, **DO-NOT-EDIT** mirror of that directory,
+published on every framework release. `PROVENANCE.md` records the image-repo commit the tree was
+migrated from. A change made in the mirror is overwritten by the next publish; make it in the host.
+
+Four consequences for the checklists below, which predate the move and are otherwise unchanged:
+
+- **Plain paths are relative to this tree** — `sandbox/` in the host, the root in the mirror.
+- **`vsify-enterprise-mcp:` referents are now the same repository**, one directory up. In-tree,
+  `tests/test_contributing_references_resolve.py` asserts that they resolve there too.
+- **There is ONE wire pin**, the host's
+  `vsify-enterprise-mcp:schemas/SANDBOX_WIRE.json`. This tree carries no copy; the mirror receives
+  one rendered from the host's (ADR-P048 §2). Dependency tracking for `Dockerfile` likewise lives in
+  the host (ADR-P048 §9). Steps that told you to copy either between repositories are marked
+  superseded in place rather than renumbered.
+- **The image builds on a mirror TAG push, and only then** (ADR-P048 §3-§5).
+  `.github/workflows/build-verify-promote.yml` refuses any commit that lacks the publisher's
+  `Framework-SHA:` trailer, builds and verifies by digest, then points `:<framework-version>` at
+  that digest, and moves `:latest` only for a GA tag. Where a step below says "merge" and then
+  "`promote` moves `:latest`", read: merge in the host, and the next framework release publishes it.
+
+---
+
 ## Notation
 
 Two conventions, both cheap and both deliberate, so that a later decision to mechanise any of this
@@ -23,7 +49,7 @@ Two conventions, both cheap and both deliberate, so that a later decision to mec
 - **Every checklist step has a stable id** in backticks — `W3`, `B5`. Ids are append-only: never
   renumber a step, add a new one. Comments in `Dockerfile` and
   `.github/workflows/build-verify-promote.yml` already cite these ids by name.
-- **A referent in the other repository is prefixed** `vsify-enterprise-mcp:` — e.g.
+- **A referent in the host repository is prefixed** `vsify-enterprise-mcp:` — e.g.
   `vsify-enterprise-mcp:tests/test_sandbox_wire_conformance.py`. A referent in *this* repository is
   a plain repo-relative path — e.g. `tests/test_wire_conformance.py`. That one prefix is what lets
   `tests/test_contributing_references_resolve.py` distinguish "lives in the other repo" from
@@ -55,22 +81,25 @@ is no second one, and none should be built.
 
 ## Wire-contract sync checklist (issue #353)
 
-`schemas/SANDBOX_WIRE.json` exists **byte-identically** in two repositories:
+`vsify-enterprise-mcp:schemas/SANDBOX_WIRE.json` is the ONE copy of the wire pin (ADR-P048 §1).
+Before the move it was vendored byte-identically into two repositories; it is still asserted by
+two codecs, one per side of the wire:
 
 | Repo                          | Codec                        | Test that asserts the codec against the vectors        |
 | ----------------------------- | ---------------------------- | ------------------------------------------------------ |
 | `vsify-enterprise-mcp` (host) | `vsify-enterprise-mcp:vsify_enterprise_mcp/isolation/wire_framing.py` | `vsify-enterprise-mcp:tests/test_sandbox_wire_conformance.py` |
 | `vsify-module-sandbox` (image) | `vsify_sandbox/framing.py`  | `tests/test_wire_conformance.py`                       |
 
-Nothing copies the file. Each side's conformance test only catches drift *after* both sides have
-already been edited independently, and nothing in either repo's CI fails a PR because the *other*
-repo's copy fell behind. This checklist does not close that gap mechanically. It makes it much
-harder to forget a step mid-change.
+Before ADR-P048, nothing copied the file, and nothing in either repo's CI failed a PR because the
+*other* repo's copy fell behind. In-tree there is no other copy to fall behind, and both
+conformance suites run against the same file in the same PR. What the checklist still guards is
+the ORDER of a codec change against the published image (`W2`), which no single-commit test can
+see.
 
-> **Do not trust `schemas/SANDBOX_WIRE.json`'s own `$schema_note` on this point.** It names the host-side
+> **Do not trust `vsify-enterprise-mcp:schemas/SANDBOX_WIRE.json`'s own `$schema_note` on this point.** It names the host-side
 > asserter as `vsify-enterprise-mcp:tests/test_wire_framing.py`. That file exists in the host repo — so this is a
 > misattribution, not a dangling path, and it will not look wrong at a glance — but it is a pure
-> codec unit test that never opens `schemas/SANDBOX_WIRE.json`. Running it proves nothing about vector
+> codec unit test that never opens `vsify-enterprise-mcp:schemas/SANDBOX_WIRE.json`. Running it proves nothing about vector
 > drift. The table above is correct; the `$schema_note` is not. Correcting the note edits the
 > byte-identical file, so it is itself a full `W1`–`W9` change and is deliberately left for a PR
 > that can exercise this checklist rather than fixed in passing.
@@ -103,7 +132,7 @@ harder to forget a step mid-change.
       is lost.
 
 - [ ] **`W4` — Regenerate the golden vectors from the updated codec.** There is **no generator
-      script** in either repo; `schemas/SANDBOX_WIRE.json` is hand-maintained. Recompute rather
+      script** in either repo; `vsify-enterprise-mcp:schemas/SANDBOX_WIRE.json` is hand-maintained. Recompute rather
       than hand-editing `frame_hex`:
 
       ```bash
@@ -123,7 +152,9 @@ harder to forget a step mid-change.
       Then read the diff. If no vector's bytes moved, the change was internal-only — which is the
       question `W7` turns on.
 
-- [ ] **`W5` — Copy the file byte-identical into the other repo, and prove it.** A
+- [ ] **`W5` — SUPERSEDED by ADR-P048 §1/§2: there is one copy, so there is nothing to copy.**
+      The pre-move procedure is kept below for the record only.
+      Copy the file byte-identical into the other repo, and prove it. A
       re-serialisation (reordered keys, a changed trailing newline, a literal em dash where the
       file had `—`) is a silent break that both conformance suites will still pass.
 
@@ -139,7 +170,7 @@ harder to forget a step mid-change.
 
 - [ ] **`W7` — Bump `WIRE_VERSION` only if the ON-WIRE FORMAT changed**, not for an internal
       implementation change. The bump must agree in three places: both codecs and the
-      `wire_version` key in `schemas/SANDBOX_WIRE.json`. If you are bumping, `W2` applies and you
+      `wire_version` key in `vsify-enterprise-mcp:schemas/SANDBOX_WIRE.json`. If you are bumping, `W2` applies and you
       should already have resolved it.
 
 - [ ] **`W8` — Update ADR-P041's frame-format section** in the host repo, and bump its front-matter
@@ -173,7 +204,7 @@ Entrypoint resolution, transport plumbing, `Dockerfile`, CI config. Image-repo-o
 
 - [ ] **`B1` — The base TAG is normative in ADR-P041.** Changing `3.12-slim` to anything else is an
       ADR amendment with a two-repo review, never a Dependabot merge. Changing the *digest* of that
-      tag is routine. `.github/dependabot.yml` refuses to propose the former.
+      tag is routine. `vsify-enterprise-mcp:.github/dependabot.yml` refuses to propose the former.
 
 - [ ] **`B2` — Confirm the new digest is the MULTI-ARCH OCI INDEX digest**, not a platform-specific
       manifest digest. A per-platform digest builds fine on CI (amd64) and breaks `docker build` on
@@ -189,7 +220,7 @@ Entrypoint resolution, transport plumbing, `Dockerfile`, CI config. Image-repo-o
       `:latest`.
 
 - [ ] **`B4` — One-time, on the first Dependabot run:** confirm the `ignore` rules in
-      `.github/dependabot.yml` suppress a 3.13 proposal but do **not** suppress digest-only updates
+      `vsify-enterprise-mcp:.github/dependabot.yml` suppress a 3.13 proposal but do **not** suppress digest-only updates
       of the pinned `3.12-slim` tag. (`version-update:semver-*` governs version changes, and a
       digest-only update carries none — but verify rather than assume.) The `build` job's
       `packages: write` does **not** take effect under Dependabot's restricted token — GitHub
@@ -205,7 +236,7 @@ Entrypoint resolution, transport plumbing, `Dockerfile`, CI config. Image-repo-o
       Trivy gate, because with real dependencies unfixed findings become actionable and the flag
       stops being honest; add the install in a `FROM ... AS builder` stage and `COPY --from=builder`
       into `runtime`, so the final layer keeps no build tooling; and add a lockfile plus a matching
-      `pip` ecosystem entry to `.github/dependabot.yml`.
+      `pip` ecosystem entry to `vsify-enterprise-mcp:.github/dependabot.yml`.
 
 - [ ] **`B6` — If Trivy reddens on something you cannot fix now**, the escape hatch is a
       `.trivyignore` entry with a CVE id, a `# why:` line naming a tracking issue, and an
@@ -218,7 +249,8 @@ Entrypoint resolution, transport plumbing, `Dockerfile`, CI config. Image-repo-o
 
 1. The diff is one line and the tag is unchanged (`python:3.12-slim`).
 2. `verify` is green — smoke test **and** the Trivy gate ran against the new digest.
-3. Merge. `promote` then moves `:latest` from that already-verified digest.
+3. Merge (in the host). The next framework release's mirror tag builds it, and `promote` tags
+   `:<framework-version>` (and, on GA, `:latest`) from that already-verified digest.
 
 ---
 
@@ -242,7 +274,7 @@ failure or a GHCR rate limit, so scanner trouble blocks the promote rather than 
 **Never add `continue-on-error` to a scan step.** That single change converts this gate into
 decoration.
 
-`.github/workflows/base-image-watch.yml` runs weekly and closes the two things the build pipeline
+`vsify-enterprise-mcp:.github/workflows/sandbox-base-image-watch.yml` runs weekly and closes the two things the build pipeline
 structurally cannot see: whether the pin has drifted with no Dependabot PR behind it (the ecosystem
 is broken), and whether the image production is running *right now* has acquired a fixable CVE
 since it was built.

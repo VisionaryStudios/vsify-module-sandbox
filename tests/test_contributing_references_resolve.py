@@ -31,6 +31,13 @@ _CROSS_REPO_PREFIX = "vsify-enterprise-mcp:"
 
 _STEP_ID = re.compile(r"^- \[ \] \*\*`([A-Z]\d+)`", re.MULTILINE)
 
+# In-tree (ADR-P048 §1) the "other repository" is the directory this tree sits in, so a marked
+# referent is locally resolvable after all. The host package directory beside this tree is what
+# identifies that layout; in the mirror it is absent and the marked referents stay unresolvable
+# from here, exactly as before the move.
+_HOST_ROOT = _ROOT.parent
+_IN_TREE = (_HOST_ROOT / "vsify_enterprise_mcp").is_dir()
+
 
 def _spans() -> list[str]:
     """Every inline code span outside a fenced block."""
@@ -72,3 +79,22 @@ def test_checklist_step_ids_are_unique():
     assert ids, "step ids are the mechanisation seam — they must not disappear"
     duplicates = sorted({i for i in ids if ids.count(i) > 1})
     assert not duplicates, f"duplicate checklist step id(s): {duplicates}"
+
+
+def test_cross_repo_references_resolve_in_the_host_when_in_tree():
+    """In-tree, the prefix names THIS repository's root — so a marked referent that does not exist
+    there is as dangling as an unmarked one. Before ADR-P048 nothing could check the other half of
+    the notation; co-location is what makes it checkable, so it is checked."""
+    if not _IN_TREE:
+        return  # mirror layout: the host is another repository, unreachable from this checkout
+    missing = [
+        s
+        for s in _spans()
+        if s.startswith(_CROSS_REPO_PREFIX)
+        and s != _CROSS_REPO_PREFIX
+        and not (_HOST_ROOT / s[len(_CROSS_REPO_PREFIX) :]).exists()
+    ]
+    assert not missing, (
+        f"CONTRIBUTING.md names host-repo paths that do not exist in {_HOST_ROOT}: "
+        f"{sorted(set(missing))}"
+    )

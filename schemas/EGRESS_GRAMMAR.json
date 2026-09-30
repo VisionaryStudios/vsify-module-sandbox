@@ -1,0 +1,944 @@
+{
+  "egress_grammar_pin_version": 1,
+  "env_var": "SANDBOX_EGRESS_ALLOW",
+  "framework_version": "0.14.0-rc.2",
+  "generated_by": "scripts/egress_grammar_vectors.py",
+  "grammar_vectors": [
+    {
+      "egress_allow": [],
+      "grammar_error": null,
+      "name": "empty_list",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com"
+      ],
+      "grammar_error": null,
+      "name": "single_literal",
+      "sandbox_env": "graph.microsoft.com"
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com",
+        "*.sharepoint.com"
+      ],
+      "grammar_error": null,
+      "name": "literal_and_wildcard",
+      "sandbox_env": "graph.microsoft.com,*.sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        "*.sharepoint.com"
+      ],
+      "grammar_error": null,
+      "name": "wildcard_two_labels",
+      "sandbox_env": "*.sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        "*.files.contoso.example"
+      ],
+      "grammar_error": null,
+      "name": "wildcard_deep_suffix",
+      "sandbox_env": "*.files.contoso.example"
+    },
+    {
+      "egress_allow": [
+        "*.SharePoint.COM"
+      ],
+      "grammar_error": null,
+      "name": "wildcard_uppercase",
+      "sandbox_env": "*.SharePoint.COM"
+    },
+    {
+      "egress_allow": [
+        "*.sharepoint.com."
+      ],
+      "grammar_error": null,
+      "name": "wildcard_trailing_dot",
+      "sandbox_env": "*.sharepoint.com."
+    },
+    {
+      "egress_allow": [
+        "  *.sharepoint.com  "
+      ],
+      "grammar_error": null,
+      "name": "wildcard_surrounding_whitespace",
+      "sandbox_env": "  *.sharepoint.com  "
+    },
+    {
+      "egress_allow": [
+        "*.xn--bcher-kva.example"
+      ],
+      "grammar_error": null,
+      "name": "wildcard_punycode_label",
+      "sandbox_env": "*.xn--bcher-kva.example"
+    },
+    {
+      "egress_allow": [
+        "*.0xa9.com"
+      ],
+      "grammar_error": null,
+      "name": "wildcard_hex_label_under_real_tld",
+      "sandbox_env": "*.0xa9.com"
+    },
+    {
+      "egress_allow": [
+        "*.co.uk"
+      ],
+      "grammar_error": null,
+      "name": "wildcard_multi_label_public_suffix_known_gap",
+      "sandbox_env": "*.co.uk"
+    },
+    {
+      "egress_allow": [
+        ".sharepoint.com"
+      ],
+      "grammar_error": null,
+      "name": "leading_dot_entry_is_a_literal_apex",
+      "sandbox_env": ".sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        "10.0.0.5"
+      ],
+      "grammar_error": null,
+      "name": "literal_ip_is_grammar_valid",
+      "sandbox_env": "10.0.0.5"
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com:443"
+      ],
+      "grammar_error": null,
+      "name": "literal_with_port_is_an_opaque_literal",
+      "sandbox_env": "graph.microsoft.com:443"
+    },
+    {
+      "egress_allow": [
+        "",
+        "   ",
+        "graph.microsoft.com"
+      ],
+      "grammar_error": null,
+      "name": "blank_entries_are_skipped",
+      "sandbox_env": ",   ,graph.microsoft.com"
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com\n"
+      ],
+      "grammar_error": null,
+      "name": "literal_trailing_newline_is_surrounding_whitespace",
+      "sandbox_env": "graph.microsoft.com\n"
+    },
+    {
+      "egress_allow": [
+        "*.com"
+      ],
+      "grammar_error": "egress_allow_wildcard_suffix_too_broad",
+      "name": "error_whole_tld",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "*.com."
+      ],
+      "grammar_error": "egress_allow_wildcard_suffix_too_broad",
+      "name": "error_whole_tld_trailing_dot",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "*"
+      ],
+      "grammar_error": "egress_allow_malformed_wildcard",
+      "name": "error_bare_star",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "*."
+      ],
+      "grammar_error": "egress_allow_malformed_wildcard",
+      "name": "error_star_dot_only",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "foo.*.com"
+      ],
+      "grammar_error": "egress_allow_malformed_wildcard",
+      "name": "error_mid_label_wildcard",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "*share*.com"
+      ],
+      "grammar_error": "egress_allow_malformed_wildcard",
+      "name": "error_glob_inside_label",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "*.share*.com"
+      ],
+      "grammar_error": "egress_allow_malformed_wildcard",
+      "name": "error_second_wildcard_in_suffix",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "**.sharepoint.com"
+      ],
+      "grammar_error": "egress_allow_malformed_wildcard",
+      "name": "error_double_star_prefix",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "*.-bad.example"
+      ],
+      "grammar_error": "egress_allow_malformed_wildcard",
+      "name": "error_leading_hyphen_label",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "*.bad-.example"
+      ],
+      "grammar_error": "egress_allow_malformed_wildcard",
+      "name": "error_trailing_hyphen_label",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "*.a..example"
+      ],
+      "grammar_error": "egress_allow_malformed_wildcard",
+      "name": "error_empty_label",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "*.under_score.example"
+      ],
+      "grammar_error": "egress_allow_malformed_wildcard",
+      "name": "error_underscore_label",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "*.bücher.example"
+      ],
+      "grammar_error": "egress_allow_malformed_wildcard",
+      "name": "error_non_ascii_label",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "*.169.254"
+      ],
+      "grammar_error": "egress_allow_malformed_wildcard",
+      "name": "error_decimal_address_suffix",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "*.0xa9.0xfe"
+      ],
+      "grammar_error": "egress_allow_malformed_wildcard",
+      "name": "error_hex_address_suffix",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "*.0376.0376"
+      ],
+      "grammar_error": "egress_allow_malformed_wildcard",
+      "name": "error_octal_address_suffix",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com",
+        "*.com"
+      ],
+      "grammar_error": "egress_allow_wildcard_suffix_too_broad",
+      "name": "error_one_bad_entry_poisons_the_list",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "*.foo\n.com"
+      ],
+      "grammar_error": "egress_allow_forbidden_character",
+      "name": "error_wildcard_label_with_embedded_newline",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com\nevil.example"
+      ],
+      "grammar_error": "egress_allow_forbidden_character",
+      "name": "error_literal_with_embedded_newline",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "a.example,b.example"
+      ],
+      "grammar_error": "egress_allow_forbidden_character",
+      "name": "error_comma_inside_literal",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "*.sharepoint.com,evil.example"
+      ],
+      "grammar_error": "egress_allow_forbidden_character",
+      "name": "error_comma_inside_wildcard",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com,"
+      ],
+      "grammar_error": "egress_allow_forbidden_character",
+      "name": "error_trailing_comma",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "graph microsoft.com"
+      ],
+      "grammar_error": "egress_allow_forbidden_character",
+      "name": "error_interior_space",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "graph.\tmicrosoft.com"
+      ],
+      "grammar_error": "egress_allow_forbidden_character",
+      "name": "error_interior_tab",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com\revil.example"
+      ],
+      "grammar_error": "egress_allow_forbidden_character",
+      "name": "error_carriage_return",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com\u0000"
+      ],
+      "grammar_error": "egress_allow_forbidden_character",
+      "name": "error_nul_character",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "graph\u001b.microsoft.com"
+      ],
+      "grammar_error": "egress_allow_forbidden_character",
+      "name": "error_escape_character",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com",
+        "a.example,b.example"
+      ],
+      "grammar_error": "egress_allow_forbidden_character",
+      "name": "error_forbidden_character_poisons_the_list",
+      "sandbox_env": null
+    }
+  ],
+  "match_vectors": [
+    {
+      "egress_allow": [
+        "graph.microsoft.com"
+      ],
+      "grammar_error": null,
+      "host": "graph.microsoft.com",
+      "match_error": null,
+      "matches": true,
+      "name": "literal_exact",
+      "negative_control": false,
+      "sandbox_decision": "allow",
+      "sandbox_env": "graph.microsoft.com"
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com"
+      ],
+      "grammar_error": null,
+      "host": "Graph.Microsoft.COM",
+      "match_error": null,
+      "matches": true,
+      "name": "literal_host_uppercase",
+      "negative_control": false,
+      "sandbox_decision": "allow",
+      "sandbox_env": "graph.microsoft.com"
+    },
+    {
+      "egress_allow": [
+        "GRAPH.MICROSOFT.COM"
+      ],
+      "grammar_error": null,
+      "host": "graph.microsoft.com",
+      "match_error": null,
+      "matches": true,
+      "name": "literal_entry_uppercase",
+      "negative_control": false,
+      "sandbox_decision": "allow",
+      "sandbox_env": "GRAPH.MICROSOFT.COM"
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com"
+      ],
+      "grammar_error": null,
+      "host": "graph.microsoft.com.",
+      "match_error": null,
+      "matches": true,
+      "name": "literal_host_trailing_dot",
+      "negative_control": false,
+      "sandbox_decision": "allow",
+      "sandbox_env": "graph.microsoft.com"
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com."
+      ],
+      "grammar_error": null,
+      "host": "graph.microsoft.com",
+      "match_error": null,
+      "matches": true,
+      "name": "literal_entry_trailing_dot",
+      "negative_control": false,
+      "sandbox_decision": "allow",
+      "sandbox_env": "graph.microsoft.com."
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com"
+      ],
+      "grammar_error": null,
+      "host": "x.graph.microsoft.com",
+      "match_error": null,
+      "matches": false,
+      "name": "literal_does_not_cover_subdomain",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "graph.microsoft.com"
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com"
+      ],
+      "grammar_error": null,
+      "host": "microsoft.com",
+      "match_error": null,
+      "matches": false,
+      "name": "literal_does_not_cover_parent",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "graph.microsoft.com"
+    },
+    {
+      "egress_allow": [
+        "*.sharepoint.com"
+      ],
+      "grammar_error": null,
+      "host": "contoso.sharepoint.com",
+      "match_error": null,
+      "matches": true,
+      "name": "wildcard_child",
+      "negative_control": false,
+      "sandbox_decision": "allow",
+      "sandbox_env": "*.sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        "*.sharepoint.com"
+      ],
+      "grammar_error": null,
+      "host": "contoso-my.sharepoint.com",
+      "match_error": null,
+      "matches": true,
+      "name": "wildcard_hyphenated_child",
+      "negative_control": false,
+      "sandbox_decision": "allow",
+      "sandbox_env": "*.sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        "*.sharepoint.com"
+      ],
+      "grammar_error": null,
+      "host": "a.b.contoso.sharepoint.com",
+      "match_error": null,
+      "matches": true,
+      "name": "wildcard_deep_child",
+      "negative_control": false,
+      "sandbox_decision": "allow",
+      "sandbox_env": "*.sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        "*.sharepoint.com"
+      ],
+      "grammar_error": null,
+      "host": "Contoso.SharePoint.COM",
+      "match_error": null,
+      "matches": true,
+      "name": "wildcard_child_uppercase",
+      "negative_control": false,
+      "sandbox_decision": "allow",
+      "sandbox_env": "*.sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        "*.sharepoint.com"
+      ],
+      "grammar_error": null,
+      "host": "contoso.sharepoint.com.",
+      "match_error": null,
+      "matches": true,
+      "name": "wildcard_child_trailing_dot",
+      "negative_control": false,
+      "sandbox_decision": "allow",
+      "sandbox_env": "*.sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        "*.SHAREPOINT.COM"
+      ],
+      "grammar_error": null,
+      "host": "contoso.sharepoint.com",
+      "match_error": null,
+      "matches": true,
+      "name": "wildcard_uppercase_entry",
+      "negative_control": false,
+      "sandbox_decision": "allow",
+      "sandbox_env": "*.SHAREPOINT.COM"
+    },
+    {
+      "egress_allow": [
+        "*.sharepoint.com"
+      ],
+      "grammar_error": null,
+      "host": "sharepoint.com",
+      "match_error": null,
+      "matches": false,
+      "name": "wildcard_does_not_cover_apex",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "*.sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        "*.sharepoint.com",
+        "sharepoint.com"
+      ],
+      "grammar_error": null,
+      "host": "sharepoint.com",
+      "match_error": null,
+      "matches": true,
+      "name": "apex_listed_literally_alongside_wildcard",
+      "negative_control": false,
+      "sandbox_decision": "allow",
+      "sandbox_env": "*.sharepoint.com,sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        "*.sharepoint.com"
+      ],
+      "grammar_error": null,
+      "host": "evilsharepoint.com",
+      "match_error": null,
+      "matches": false,
+      "name": "lookalike_no_separating_dot",
+      "negative_control": true,
+      "sandbox_decision": "deny",
+      "sandbox_env": "*.sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        "*.sharepoint.com"
+      ],
+      "grammar_error": null,
+      "host": "contoso-sharepoint.com",
+      "match_error": null,
+      "matches": false,
+      "name": "lookalike_hyphen_joined",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "*.sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        "*.sharepoint.com"
+      ],
+      "grammar_error": null,
+      "host": "contoso.sharepoint.com.evil.example",
+      "match_error": null,
+      "matches": false,
+      "name": "lookalike_suffix_appended",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "*.sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        "*.sharepoint.com"
+      ],
+      "grammar_error": null,
+      "host": "sharepoint.com.evil.example",
+      "match_error": null,
+      "matches": false,
+      "name": "lookalike_suffix_as_subdomain",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "*.sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com"
+      ],
+      "grammar_error": null,
+      "host": "evilgraph.microsoft.com",
+      "match_error": null,
+      "matches": false,
+      "name": "literal_lookalike_prefix",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "graph.microsoft.com"
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com",
+        "*.sharepoint.com"
+      ],
+      "grammar_error": null,
+      "host": "example.org",
+      "match_error": null,
+      "matches": false,
+      "name": "unrelated_host",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "graph.microsoft.com,*.sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        "*.co.uk"
+      ],
+      "grammar_error": null,
+      "host": "anyone.co.uk",
+      "match_error": null,
+      "matches": true,
+      "name": "multi_label_public_suffix_known_gap",
+      "negative_control": false,
+      "sandbox_decision": "allow",
+      "sandbox_env": "*.co.uk"
+    },
+    {
+      "egress_allow": [
+        ".sharepoint.com"
+      ],
+      "grammar_error": null,
+      "host": "sharepoint.com",
+      "match_error": null,
+      "matches": true,
+      "name": "leading_dot_entry_matches_apex_only",
+      "negative_control": false,
+      "sandbox_decision": "allow",
+      "sandbox_env": ".sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        ".sharepoint.com"
+      ],
+      "grammar_error": null,
+      "host": "contoso.sharepoint.com",
+      "match_error": null,
+      "matches": false,
+      "name": "leading_dot_entry_is_not_a_wildcard",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": ".sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com"
+      ],
+      "grammar_error": null,
+      "host": "",
+      "match_error": null,
+      "matches": false,
+      "name": "empty_host",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "graph.microsoft.com"
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com"
+      ],
+      "grammar_error": null,
+      "host": "   ",
+      "match_error": null,
+      "matches": false,
+      "name": "blank_host",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "graph.microsoft.com"
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com"
+      ],
+      "grammar_error": null,
+      "host": ".",
+      "match_error": null,
+      "matches": false,
+      "name": "dot_only_host",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "graph.microsoft.com"
+    },
+    {
+      "egress_allow": [],
+      "grammar_error": null,
+      "host": "graph.microsoft.com",
+      "match_error": null,
+      "matches": false,
+      "name": "empty_list_denies",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "",
+        "  "
+      ],
+      "grammar_error": null,
+      "host": "graph.microsoft.com",
+      "match_error": null,
+      "matches": false,
+      "name": "blank_entries_only_deny",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": ",  "
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com"
+      ],
+      "grammar_error": null,
+      "host": "graph.microsoft.com:443",
+      "match_error": null,
+      "matches": false,
+      "name": "host_with_port_is_not_a_host",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "graph.microsoft.com"
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com:443"
+      ],
+      "grammar_error": null,
+      "host": "graph.microsoft.com",
+      "match_error": null,
+      "matches": false,
+      "name": "entry_with_port_never_matches_a_host",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "graph.microsoft.com:443"
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com",
+        "*.sharepoint.com"
+      ],
+      "grammar_error": null,
+      "host": "169.254.169.254",
+      "match_error": null,
+      "matches": false,
+      "name": "ip_literal_host_against_hostname_list",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "graph.microsoft.com,*.sharepoint.com"
+    },
+    {
+      "egress_allow": [
+        "10.0.0.5"
+      ],
+      "grammar_error": null,
+      "host": "10.0.0.5",
+      "match_error": null,
+      "matches": true,
+      "name": "ip_literal_listed_exactly",
+      "negative_control": false,
+      "sandbox_decision": "allow",
+      "sandbox_env": "10.0.0.5"
+    },
+    {
+      "egress_allow": [
+        "169.254.169.254"
+      ],
+      "grammar_error": null,
+      "host": "0xA9FEA9FE",
+      "match_error": null,
+      "matches": false,
+      "name": "alternate_ip_encoding_is_not_the_listed_ip",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "169.254.169.254"
+    },
+    {
+      "egress_allow": [
+        "169.254.169.254"
+      ],
+      "grammar_error": null,
+      "host": "2852039166",
+      "match_error": null,
+      "matches": false,
+      "name": "decimal_ip_encoding_is_not_the_listed_ip",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "169.254.169.254"
+    },
+    {
+      "egress_allow": [
+        "::1"
+      ],
+      "grammar_error": null,
+      "host": "::1",
+      "match_error": null,
+      "matches": true,
+      "name": "ipv6_literal_listed_exactly",
+      "negative_control": false,
+      "sandbox_decision": "allow",
+      "sandbox_env": "::1"
+    },
+    {
+      "egress_allow": [
+        "[::1]"
+      ],
+      "grammar_error": null,
+      "host": "::1",
+      "match_error": null,
+      "matches": false,
+      "name": "ipv6_bracketed_entry_is_an_opaque_literal",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "[::1]"
+    },
+    {
+      "egress_allow": [
+        "*.com",
+        "graph.microsoft.com"
+      ],
+      "grammar_error": "egress_allow_wildcard_suffix_too_broad",
+      "host": "graph.microsoft.com",
+      "match_error": "egress_allow_wildcard_suffix_too_broad",
+      "matches": null,
+      "name": "malformed_entry_reached_first_errors",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com",
+        "*.com"
+      ],
+      "grammar_error": "egress_allow_wildcard_suffix_too_broad",
+      "host": "example.org",
+      "match_error": "egress_allow_wildcard_suffix_too_broad",
+      "matches": null,
+      "name": "malformed_entry_after_miss_errors",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com",
+        "*.com"
+      ],
+      "grammar_error": "egress_allow_wildcard_suffix_too_broad",
+      "host": "graph.microsoft.com",
+      "match_error": null,
+      "matches": true,
+      "name": "literal_hit_before_malformed_entry",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "*.169.254"
+      ],
+      "grammar_error": "egress_allow_malformed_wildcard",
+      "host": "169.254.169.254",
+      "match_error": "egress_allow_malformed_wildcard",
+      "matches": null,
+      "name": "address_shaped_wildcard_errors",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "a.example,b.example"
+      ],
+      "grammar_error": "egress_allow_forbidden_character",
+      "host": "a.example",
+      "match_error": "egress_allow_forbidden_character",
+      "matches": null,
+      "name": "comma_entry_matches_neither_half",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": null
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com\n"
+      ],
+      "grammar_error": null,
+      "host": "graph.microsoft.com",
+      "match_error": null,
+      "matches": true,
+      "name": "trailing_newline_entry_matches_its_host",
+      "negative_control": false,
+      "sandbox_decision": "allow",
+      "sandbox_env": "graph.microsoft.com\n"
+    },
+    {
+      "egress_allow": [
+        "graph.microsoft.com"
+      ],
+      "grammar_error": null,
+      "host": "graph.microsoft.com\nevil.example",
+      "match_error": null,
+      "matches": false,
+      "name": "host_with_embedded_newline_never_matches",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "graph.microsoft.com"
+    }
+  ],
+  "wildcard_min_labels": 2,
+  "wildcard_prefix": "*."
+}
