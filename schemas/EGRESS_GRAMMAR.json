@@ -1,7 +1,7 @@
 {
   "egress_grammar_pin_version": 1,
   "env_var": "SANDBOX_EGRESS_ALLOW",
-  "framework_version": "0.14.0-rc.5",
+  "framework_version": "0.14.0-rc.6",
   "generated_by": "scripts/egress_grammar_vectors.py",
   "grammar_vectors": [
     {
