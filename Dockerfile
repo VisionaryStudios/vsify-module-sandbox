@@ -37,6 +37,18 @@
 # is keyed on the pushed digest, never on this file's internal shape). See step `B5`.
 FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f AS runtime
 
+# Apply Debian's published fixes the pinned digest predates (ADR-P041 v1.10). Upstream rebuilds
+# python:3.12-slim on its own schedule, often days after Debian ships a fix, and in that gap every
+# release's `verify` reddened on a FIXABLE base CVE (rc.2, rc.4, rc.6). `upgrade` (never
+# `full-upgrade`) only replaces installed packages: it installs and removes nothing, so the package
+# SET stays the base's, and the pin above still decides which base that is. The cost is that the
+# image now also depends on the build date; promote records the resulting digest (ADR-P048 §6). Once
+# a newer base carries every fix this layer is a no-op, and it stays as the standing remedy.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY --chown=65534:65534 vsify_sandbox/ /app/vsify_sandbox/
 

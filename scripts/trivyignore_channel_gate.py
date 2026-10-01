@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """The `.trivyignore` escape hatch is an rc-lane tool only (issue #628, ADR-P041 v1.8).
 
-A prerelease build may ship with a dated, justified suppression while the base-digest bump waits on
-upstream. A GA build may not: `verify` fails when any suppression is active, and the only remedy is
-the bump itself. The channel comes from `mirror-guard`, which derives it from the tag.
+A prerelease build may ship with a dated, justified suppression while a fix waits on upstream. A GA
+build may not: `verify` fails when any suppression is active, and the remedy is a build that carries
+the fix -- the Dockerfile's `apt-get upgrade` layer (ADR-P041 v1.10) or a base-digest bump -- with the
+line deleted. The channel comes from `mirror-guard`, which derives it from the tag.
 
 Unknown channels fail closed. An empty one is what `needs.mirror-guard.outputs.channel` evaluates
 to if `verify` stops listing `mirror-guard` in its `needs:`, because job outputs are not transitive.
@@ -17,8 +18,9 @@ from pathlib import Path
 
 CHANNELS = ("prerelease", "ga")
 _REMEDY = (
-    "GA ships with no suppressions. Bump the base digest in Dockerfile to one that carries the fix, "
-    "delete the suppression lines, and cut the release again."
+    "GA ships with no suppressions. Get a build that carries the fix: for a Debian package, rebuild "
+    "so the Dockerfile's `apt-get upgrade` layer applies it (ADR-P041 v1.10); otherwise bump the "
+    "base digest. Then delete the suppression lines and cut the release again."
 )
 
 

@@ -241,15 +241,28 @@ Entrypoint resolution, transport plumbing, `Dockerfile`, CI config. Image-repo-o
 
 - [ ] **`B6` — If Trivy reddens on something you cannot fix now**, the escape hatch is a
       `.trivyignore` entry with a CVE id, a `# why:` line naming a tracking issue, and an
-      `exp:YYYY-MM-DD` date at most 30 days out — never a broadened `severity`, never a removed
+      `exp:YYYY-MM-DD` date at most 7 days out, honoured on the rc lane only (GA `verify` refuses
+      any active line, ADR-P041 v1.8) — never a broadened `severity`, never a removed
       `exit-code`, and never `continue-on-error`. `tests/test_trivyignore_policy.py` enforces the
       form, Trivy itself stops honouring the line on its date, and every live suppression is
       printed into the `verify` job summary on every run.
 
+- [ ] **`B7` — Keep the `apt-get upgrade` layer, and know what it cannot reach** (ADR-P041 v1.10).
+      It applies every fix Debian has published by build time, so a fixable base CVE that lands
+      after the pinned digest no longer reddens `verify`. It does **not** replace the digest bump:
+      Dependabot's digest PRs still move the base, and the layer is a no-op on a base that already
+      carries every fix. It reaches only Debian packages: the Python install under `/usr/local`
+      (and its bundled `pip`) comes from the base, so a finding there still needs a digest bump.
+      Never widen it to `full-upgrade` or add an `apt-get install`. `upgrade` installs and removes
+      nothing, which is what keeps the package set the base's.
+
 ### Reviewing a Dependabot base-image PR
 
-1. The diff is one line and the tag is unchanged (`python:3.12-slim`).
-2. `verify` is green — smoke test **and** the Trivy gate ran against the new digest.
+1. Only the digest moves; the tag is unchanged (`python:3.12-slim`). Dependabot bumps
+   `sandbox/Dockerfile` alone, so add the same digest to both `scaffold/Dockerfile` `FROM` lines in
+   the PR (ADR-P048 v1.5 parity; host runbook §2).
+2. The host's CI is green, in particular `sandbox-serving-e2e`: it builds this tree's image, runs the
+   real-Docker e2e suite against it, and runs the `verify` Trivy gate over it (ADR-P048 v1.10).
 3. Merge (in the host). The next framework release's mirror tag builds it, and `promote` tags
    `:<framework-version>` (and, on GA, `:latest`) from that already-verified digest.
 

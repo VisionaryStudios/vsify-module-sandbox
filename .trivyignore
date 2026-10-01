@@ -3,7 +3,10 @@
 # For exactly one situation: a FIXABLE CRITICAL/HIGH lands in the base image, the fixed base is not
 # published upstream yet (or not yet built and smoke-tested), and a prerelease must still ship.
 #
-# It is a DELAY, never a waiver. The real remedy is almost always one Dependabot merge away.
+# It is a DELAY, never a waiver. Since ADR-P041 v1.10 the Dockerfile's `apt-get upgrade` layer
+# applies Debian's fixes at build time, so a fixable base CVE should not reach `verify` at all. An
+# entry here is now for the residue: a fix Debian has not yet published to the security archive the
+# build reads, or a finding outside the Debian packages.
 #
 # RULES:
 #   1. Every entry carries `exp:YYYY-MM-DD`. Trivy itself stops honouring the line on that date,
@@ -13,18 +16,14 @@
 #      the same for every build.
 #   3. A `# why:` line naming a tracking issue sits directly above the entry (same test).
 #   4. PRERELEASE ONLY. On a GA tag, `verify` fails while ANY line here is active
-#      (scripts/trivyignore_channel_gate.py). GA's only remedy is the base bump.
+#      (scripts/trivyignore_channel_gate.py). GA's remedy is a build that carries the fix: the
+#      `apt-get upgrade` layer for a Debian package, otherwise a base bump. Then delete the line.
 #   5. Every active entry is printed into the `verify` job summary on EVERY run, so a live bypass
 #      is visible to anyone reading a build — not only to someone who thinks to open this file.
 #
-# Side effect while an entry is live: sandbox-base-image-watch.yml scans with this same file, so
-# the release watch does not alarm on a suppressed CVE either.
+# While an entry is live, sandbox-base-image-watch.yml scans with this same file AND alarms on the
+# active line itself (`release_clean_under_suppression`, ADR-P041 v1.9), and `make ga` refuses.
 #
 # Format:
 #   # why: <reason>; base bump tracked in #NNN
 #   CVE-YYYY-NNNNN exp:YYYY-MM-DD
-
-# why: openssl QUIC DoS, fixed in 3.5.7-1~deb13u3, absent from every python:3.12-slim digest; bump tracked in #629
-CVE-2026-75804 exp:2026-10-07
-# why: openssl info disclosure, fixed in 3.5.7-1~deb13u3, absent from every python:3.12-slim digest; bump tracked in #629
-CVE-2026-84782 exp:2026-10-07

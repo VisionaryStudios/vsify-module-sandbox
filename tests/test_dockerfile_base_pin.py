@@ -52,3 +52,60 @@ def test_the_base_image_is_digest_pinned_not_a_floating_tag():
         f"alongside the digest (Dependabot compares tag strings; a bare digest is untracked)."
     )
     assert match.group("stage") == "runtime", "expected the `AS runtime` stage name to be preserved"
+
+
+# --- The `apt-get upgrade` layer (ADR-P041 v1.10, CONTRIBUTING `B7`) -----------------------------
+# The pin decides WHICH base is built on; this layer applies the Debian fixes that base predates.
+# Both rules below are MUSTs: `upgrade` replaces installed packages only, so the image keeps exactly
+# the base's package set. `full-upgrade`/`dist-upgrade` may remove packages, and `install` adds them.
+
+
+def _instructions() -> list[str]:
+    """Dockerfile instructions with comments dropped and `\\` continuations joined."""
+    text = _PATH.read_text(encoding="utf-8")
+    uncommented = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    logical = re.sub(r"\\\n", " ", uncommented)
+    return [line.strip() for line in logical.splitlines() if line.strip()]
+
+
+def _upgrade_layer() -> str:
+    layers = [i for i in _instructions() if i.startswith("RUN ") and "apt-get" in i]
+    assert len(layers) == 1, f"expected exactly one apt-get RUN layer, got {len(layers)}"
+    return layers[0]
+
+
+def test_the_upgrade_layer_directly_follows_from():
+    instructions = _instructions()
+    from_index = next(i for i, line in enumerate(instructions) if line.startswith("FROM "))
+    assert instructions[from_index + 1] == _upgrade_layer(), (
+        "the apt-get upgrade layer must be the first instruction after FROM, so it runs as root "
+        "over the base's packages and before anything this image adds"
+    )
+
+
+def test_the_layer_upgrades_non_interactively():
+    layer = _upgrade_layer()
+    assert "apt-get update" in layer
+    assert re.search(r"DEBIAN_FRONTEND=noninteractive apt-get upgrade -y\b", layer), layer
+
+
+_PACKAGE_SET_CHANGERS = (
+    "full-upgrade",
+    "dist-upgrade",
+    "apt-get install",
+    "apt-get remove",
+    "apt-get purge",
+    "autoremove",
+)
+
+
+def test_the_layer_never_changes_the_package_set():
+    layer = _upgrade_layer()
+    for forbidden in _PACKAGE_SET_CHANGERS:
+        assert forbidden not in layer, f"`{forbidden}` changes the base's package set (ADR-P041 v1.10)"
+
+
+def test_the_layer_leaves_no_apt_lists_behind():
+    layer = _upgrade_layer()
+    assert "apt-get clean" in layer
+    assert "rm -rf /var/lib/apt/lists/*" in layer

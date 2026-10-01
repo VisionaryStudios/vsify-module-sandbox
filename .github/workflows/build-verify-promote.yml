@@ -251,8 +251,10 @@ jobs:
         # every promote forever with no action available to anyone -- and the first person to
         # hit it would delete the gate, leaving the repo with less scanning than before it was
         # added. Gating on FIXED findings means this reddens exactly when a remedy exists and
-        # has not been taken, and the remedy is always the same: merge the base digest bump.
-        # Measured on a base only nine days stale: 3 fixable HIGH (openssl CVE-2026-14456).
+        # has not been taken. Measured on a base only nine days stale: 3 fixable HIGH (openssl
+        # CVE-2026-14456). The Dockerfile's `apt-get upgrade` layer (ADR-P041 v1.10) now applies
+        # Debian's published fixes at build time, so a red here means a fix that layer cannot
+        # reach (outside the Debian packages, or not yet in the archive) -- see CONTRIBUTING `B7`.
         # The unfixed set is NOT hidden -- the pass above publishes it to the Security tab.
         # If this image ever gains a runtime dependency, re-evaluate: CONTRIBUTING step `B5`.
         uses: ./.github/actions/trivy-scan
