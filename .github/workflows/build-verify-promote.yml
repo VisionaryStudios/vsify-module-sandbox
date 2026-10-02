@@ -145,13 +145,28 @@ jobs:
   build:
     needs: [mirror-guard, test]
     runs-on: ubuntu-latest
+    # The arm64 member builds under QEMU, which is slower and more variable than native. Bounded
+    # well above that so a stalled build reddens instead of holding the release for the 6h default.
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
+    env:
+      # THE published platform set (ADR-P048 v1.11, issue #672) -- stated once. `verify` receives
+      # it through `outputs.platforms` (a called workflow's `with:` cannot read `env`) and refuses
+      # an index that does not carry exactly this set. A platform added here needs a native runner
+      # in scripts/verify_matrix.py, or `verify` refuses it: CONTRIBUTING.md step `B8`.
+      PLATFORMS: linux/amd64,linux/arm64
     outputs:
+      # The OCI INDEX digest -- what verify reads members from and promote moves tags to.
       digest: ${{ steps.push.outputs.digest }}
+      platforms: ${{ env.PLATFORMS }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Emulates the non-native platform for the BUILD only (the Dockerfile runs `apt-get upgrade`
+      # and COPYs; nothing compiles). Verification never runs emulated -- each member is pulled and
+      # smoke-tested on its own native runner in verify-image.yml.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       # GITHUB_TOKEN is forced READ-ONLY (and secrets are withheld) on any `pull_request` run
       # whose actor is `dependabot[bot]` -- GitHub treats a Dependabot PR the same as a fork PR
@@ -169,149 +184,30 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
+          platforms: ${{ env.PLATFORMS }}
           push: true
           tags: ${{ env.IMAGE }}:sha-${{ github.sha }}
           provenance: true
           sbom: true
 
+  # Every member of the pushed index, each on a native runner: the ONE verify definition, shared
+  # with rollback-latest.yml (issue #672). `require-platforms` is the set `build` was asked for, so
+  # an index that came back short -- a silently dropped platform -- refuses here instead of
+  # promoting the survivors. mirror-guard is listed DIRECTLY, not just reached through build: a job
+  # can read only the outputs of jobs in its own `needs:`, and the channel gate reads `channel`.
   verify:
-    # mirror-guard is listed DIRECTLY, not just reached through build: a job can read only the
-    # outputs of jobs in its own `needs:`, and the channel gate below reads `channel`.
     needs: [mirror-guard, build]
-    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
-      # SARIF -> code scanning (issue #354). Free here: this repo is PUBLIC (ADR-P041 Named
-      # Residual, v1.3, records the package/repo visibility flip). On a private repo without
-      # GitHub Advanced Security the upload 403s -- drop this scope and keep only the artifact.
+      # The called workflow requests it for the SARIF upload; a caller must grant at least that.
       security-events: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
-      # A fresh runner with no retained Docker credentials from the `build` job -- pulling a
-      # package (even from a public repo, freshly-pushed GHCR packages can require auth) needs
-      # its own login. Caught by this workflow's own first real run ("unauthorized").
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pull by digest (never by mutable tag)
-        run: docker pull "${IMAGE}@${{ needs.build.outputs.digest }}"
-      - name: Real end-to-end smoke test (native Linux Docker -- unix_socket works here)
-        run: python3 scripts/smoke_test.py "${IMAGE}@${{ needs.build.outputs.digest }}"
-
-      # The .trivyignore escape hatch is rc-only (issue #628, ADR-P041 v1.8). A GA tag fails here
-      # while any suppression is active, BEFORE the scan below could honour it. Deterministic like
-      # the smoke test, so it runs after it and ahead of the feed-dependent scans. An empty or
-      # unknown channel fails closed.
-      - name: Channel gate -- GA refuses every .trivyignore suppression
-        env:
-          CHANNEL: ${{ needs.mirror-guard.outputs.channel }}
-        run: python3 scripts/trivyignore_channel_gate.py "$CHANNEL" .trivyignore
-
-      # ---- ADR-P041 supply-chain gate (issue #354) ---------------------------------------
-      # Scans the SAME digest `docker pull` fetched, the smoke test exercised, and `promote`
-      # will move `:latest` to. Never a tag, never a rebuild.
-      #
-      # ORDERED AFTER THE SMOKE TEST, deliberately. The smoke test is this repo's deterministic
-      # correctness signal; Trivy's verdict depends on an external, continuously-moving CVE feed.
-      # A scan that reddens on a feed update with no code change must not mask a real wire or
-      # entrypoint regression by failing the job first.
-      #
-      # FAIL-CLOSED BY CONSTRUCTION. Trivy exits non-zero on any FATAL error -- a trivy-db fetch
-      # failure, a GHCR rate limit, a timeout -- independently of `exit-code`. So an unreachable
-      # scanner reddens `verify`, and `promote`'s `needs:` on build and verify skips it: no tag
-      # cannot move. The ONLY change that would make this gate fail OPEN is adding
-      # `continue-on-error` to a scan step. Do not add it. (No `success()` is needed on
-      # `promote`'s `if:` either -- a needs-failure already skips a job whose `if:` carries no
-      # continue-causing expression such as `always()`.)
-      #
-      # Both passes below delegate to .github/actions/trivy-scan -- one definition of the pinned
-      # trivy-action SHA, the trivy-db mirror list, and the timeout, shared with base-image-watch
-      # and rollback-latest's own gate, instead of 5 independently hand-copied blocks.
-      - name: Scan -- observability pass (records UNFIXED findings; does NOT gate)
-        uses: ./.github/actions/trivy-scan
-        with:
-          image-ref: ${{ env.IMAGE }}@${{ needs.build.outputs.digest }}
-          format: sarif
-          output: trivy-results.sarif
-          ignore-unfixed: "false"
-          limit-severities-for-sarif: "true"
-          exit-code: "0"
-          registry-username: ${{ github.actor }}
-          registry-password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Scan -- GATE (findings with a fix available)
-        # `ignore-unfixed: true` is a policy call, not laziness. Measured on this exact base:
-        # 18 CRITICAL+HIGH, every one of them UNFIXED upstream. Gating on those would block
-        # every promote forever with no action available to anyone -- and the first person to
-        # hit it would delete the gate, leaving the repo with less scanning than before it was
-        # added. Gating on FIXED findings means this reddens exactly when a remedy exists and
-        # has not been taken. Measured on a base only nine days stale: 3 fixable HIGH (openssl
-        # CVE-2026-14456). The Dockerfile's `apt-get upgrade` layer (ADR-P041 v1.10) now applies
-        # Debian's published fixes at build time, so a red here means a fix that layer cannot
-        # reach (outside the Debian packages, or not yet in the archive) -- see CONTRIBUTING `B7`.
-        # The unfixed set is NOT hidden -- the pass above publishes it to the Security tab.
-        # If this image ever gains a runtime dependency, re-evaluate: CONTRIBUTING step `B5`.
-        uses: ./.github/actions/trivy-scan
-        with:
-          image-ref: ${{ env.IMAGE }}@${{ needs.build.outputs.digest }}
-          format: table
-          ignore-unfixed: "true"
-          exit-code: "1"
-          skip-db-update: "true" # reuse the DB the pass above fetched: one GHCR pull per run
-          registry-username: ${{ github.actor }}
-          registry-password: ${{ secrets.GITHUB_TOKEN }}
-
-      # `always()` so the full picture reaches the Security tab even when the gate above is red
-      # -- that is exactly when someone needs to read it. Fork PRs carry a read-only token and
-      # cannot upload, so they are excluded rather than left to fail. `dependabot[bot]` gets the
-      # SAME read-only-token treatment as a fork even on a same-repo PR (see the `build` job's
-      # login step comment) -- excluded here too, or this step would itself red with a confusing
-      # permissions error on every Dependabot PR, indistinguishable from a real CVE-gate failure.
-      - name: Publish to code scanning (never gates)
-        if: always() && (github.event_name == 'push' || (github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]'))
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
-        with:
-          sarif_file: trivy-results.sarif
-          category: trivy-image-build
-
-      - name: Retain the raw report (survives log expiry)
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: trivy-sarif-${{ github.sha }}
-          path: trivy-results.sarif
-          retention-days: 90
-
-      - name: Verification summary
-        if: always()
-        run: |
-          set -uo pipefail
-          {
-            echo "### verify"
-            echo
-            echo "| field | value |"
-            echo "|---|---|"
-            echo "| channel | \`${{ needs.mirror-guard.outputs.channel }}\` |"
-            echo "| image digest | \`${{ needs.build.outputs.digest }}\` |"
-            echo "| base pin | \`$(grep -m1 '^FROM ' Dockerfile | sed -e 's/^FROM //' -e 's/ AS .*$//')\` |"
-            echo "| gate | CRITICAL,HIGH with a fix available |"
-            echo
-            echo "#### Active .trivyignore suppressions"
-            if grep -qvE '^[[:space:]]*(#|$)' .trivyignore 2>/dev/null; then
-              grep -vE '^[[:space:]]*(#|$)' .trivyignore \
-                | while IFS= read -r suppression; do printf -- "- \`%s\`\n" "$suppression"; done
-              echo
-              echo "> A suppression is a DELAY, not a waiver -- each expires on its \`exp:\` date, and a GA build refuses it."
-            else
-              echo "- none"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+    uses: ./.github/workflows/verify-image.yml
+    with:
+      digest: ${{ needs.build.outputs.digest }}
+      channel: ${{ needs.mirror-guard.outputs.channel }}
+      require-platforms: ${{ needs.build.outputs.platforms }}
+      observability: true
 
   promote:
     needs: [mirror-guard, build, verify]

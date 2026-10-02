@@ -1,13 +1,14 @@
 name: rollback-latest
 
-# EMERGENCY ROLLBACK. Moves `:latest` back to a PREVIOUSLY BUILT digest, re-running the full smoke
-# test against that digest FIRST -- so ADR-P041's invariant (":latest moves ONLY from an
+# EMERGENCY ROLLBACK. Moves `:latest` back to a PREVIOUSLY BUILT digest, re-running the full
+# verification (verify-image.yml: every platform the digest carries, smoke test, channel gate,
+# Trivy) against that digest FIRST -- so ADR-P041's invariant (":latest moves ONLY from an
 # already-verified digest; a failed pipeline can never move the tag") holds on the emergency path
 # exactly as it does on `promote`. This workflow NEVER builds.
 #
 # Why a workflow rather than a laptop one-liner: `docker buildx imagetools create` locally needs a
 # PAT carrying packages:write, which nobody should be holding during an incident. Here the repo's
-# own GITHUB_TOKEN does it, the smoke test re-runs first, and the reason is recorded in the run
+# own GITHUB_TOKEN does it, the verification re-runs first, and the reason is recorded in the run
 # summary as a durable audit trail.
 #
 # WORTH KNOWING: the host repo pins `:latest`, not a digest (ADR-P041 Named Residual), so moving
@@ -28,16 +29,35 @@ env:
   IMAGE: ${{ vars.IMAGE }}
 
 jobs:
-  reverify-and-move:
+  # The same verification `promote` waits on (issue #672): one leg per platform the TARGET digest
+  # carries, each native. No `require-platforms`: a rollback target may predate #672 and carry
+  # linux/amd64 only, and refusing it would block the one path built for incidents -- moving
+  # `:latest` to such a digest drops arm64 for its duration, and the legs in this run name the set.
+  # `:latest` is the GA tag, so the channel is always `ga`: a rollback during a live rc suppression
+  # must not move :latest past a CVE the promote path refuses (issue #628). The digest's shape is
+  # refused inside the called workflow, before anything is pulled.
+  reverify:
+    permissions:
+      contents: read
+      packages: read
+      # Requested by the called workflow (for its SARIF upload, off here); a caller must grant it.
+      security-events: write
+    uses: ./.github/workflows/verify-image.yml
+    with:
+      digest: ${{ inputs.digest }}
+      channel: ga
+
+  move:
+    # No `always()`: a red or skipped `reverify` leg skips this job, so `:latest` never moves past
+    # an unverified member.
+    needs: reverify
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    outputs:
+      previous: ${{ steps.previous.outputs.digest }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -45,51 +65,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Dispatch inputs reach the shell through `env:`, never interpolated into a run body --
-      # a `${{ inputs.x }}` spliced directly into a script is a script-injection sink even when
-      # only writers can dispatch.
-      - name: Refuse anything that is not a digest
-        env:
-          DIGEST: ${{ inputs.digest }}
-        run: |
-          set -euo pipefail
-          if ! printf '%s' "$DIGEST" | grep -qE '^sha256:[0-9a-f]{64}$'; then
-            echo "::error::not a sha256 digest: ${DIGEST}"
-            exit 1
-          fi
-
-      - name: Re-verify BEFORE the tag moves
-        env:
-          DIGEST: ${{ inputs.digest }}
-        run: |
-          set -euo pipefail
-          docker pull "${IMAGE}@${DIGEST}"
-          python3 scripts/smoke_test.py "${IMAGE}@${DIGEST}"
-
-      # The .trivyignore escape hatch is rc-only (issue #628, ADR-P041 v1.8), and `:latest` is the
-      # GA tag, so this path's channel is always `ga`. The scan below reads the same .trivyignore;
-      # without this step a rollback during a live rc suppression would move :latest past a CVE
-      # the promote path refuses.
-      - name: Channel gate -- :latest is GA, so it refuses every .trivyignore suppression
-        run: python3 scripts/trivyignore_channel_gate.py ga .trivyignore
-
-      # Same "GATE -- fixable findings" pass build-verify-promote.yml runs before `promote` moves
-      # :latest -- the smoke test above only re-verifies functional correctness, not CVE status.
-      # Without this, an operator could roll back to a digest that now carries a fixable
-      # CRITICAL/HIGH (disclosed after that digest's original scan) with zero vulnerability
-      # check, on the one path where review pressure is lowest: an active incident.
-      - name: GATE -- fixable findings in the rollback target
-        uses: ./.github/actions/trivy-scan
-        with:
-          image-ref: ${{ env.IMAGE }}@${{ inputs.digest }}
-          format: table
-          ignore-unfixed: "true"
-          exit-code: "1"
-          registry-username: ${{ github.actor }}
-          registry-password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Resolve BEFORE the move so "Record it" below can log the "from" half of the audit trail,
-      # not just the target digest.
+      # Resolve BEFORE the move so `record` can log the "from" half of the audit trail, not just
+      # the target digest.
       - name: Resolve the current :latest digest (for the audit trail)
         id: previous
         run: |
@@ -97,6 +74,9 @@ jobs:
           d="$(docker buildx imagetools inspect "${IMAGE}:latest" --format '{{ .Manifest.Digest }}' 2>/dev/null || echo none)"
           echo "digest=${d}" >> "$GITHUB_OUTPUT"
 
+      # Dispatch inputs reach the shell through `env:`, never interpolated into a run body --
+      # a `${{ inputs.x }}` spliced directly into a script is a script-injection sink even when
+      # only writers can dispatch.
       - name: Move :latest (imagetools only -- never a rebuild)
         env:
           DIGEST: ${{ inputs.digest }}
@@ -104,21 +84,31 @@ jobs:
           set -euo pipefail
           docker buildx imagetools create -t "${IMAGE}:latest" "${IMAGE}@${DIGEST}"
 
+  # The durable audit trail, written whatever happened -- including a refused re-verification,
+  # which is exactly the incident record someone will look for. Its own job, so its `always()`
+  # can never reach the move.
+  record:
+    needs: [reverify, move]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
       - name: Record it
-        if: always()
         env:
           DIGEST: ${{ inputs.digest }}
-          PREVIOUS: ${{ steps.previous.outputs.digest }}
+          PREVIOUS: ${{ needs.move.outputs.previous || 'not resolved (move did not run)' }}
           REASON: ${{ inputs.reason }}
           ACTOR: ${{ github.actor }}
-          OUTCOME: ${{ job.status }}
+          REVERIFY: ${{ needs.reverify.result }}
+          MOVE: ${{ needs.move.result }}
         run: |
           {
             echo "### rollback"
             echo
             echo "- :latest was: \`${PREVIOUS}\`"
-            echo "- :latest now: \`${DIGEST}\`"
+            echo "- target: \`${DIGEST}\`"
+            echo "- re-verification: ${REVERIFY} (one leg per platform the target carries)"
+            echo "- move: ${MOVE}"
             echo "- reason: ${REASON}"
             echo "- actor: ${ACTOR}"
-            echo "- outcome: ${OUTCOME}"
           } >> "$GITHUB_STEP_SUMMARY"

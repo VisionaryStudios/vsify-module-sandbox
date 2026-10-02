@@ -38,6 +38,14 @@ inputs:
   trivyignores:
     required: false
     default: ".trivyignore"
+  platform:
+    description: >
+      os/arch of the index member to scan (issue #672). Empty keeps Trivy's own choice -- right for
+      a single-platform image such as the framework CI's local build, WRONG for a multi-platform
+      index, where it scans one member and says nothing about the rest. Every mirror caller that
+      scans a published digest passes it.
+    required: false
+    default: ""
   registry-username:
     description: "Passed through explicitly -- a composite action does not inherit the caller's secrets context"
     required: true
@@ -47,6 +55,21 @@ inputs:
 runs:
   using: composite
   steps:
+    # Fail closed on anything but an empty value or an os/arch(/variant) shape, before it reaches
+    # Trivy. Read through `env:`, never spliced into the script -- an input interpolated into a run
+    # body is a script-injection sink.
+    - name: Refuse a malformed platform
+      shell: bash
+      env:
+        PLATFORM: ${{ inputs.platform }}
+      # `[[ =~ ]]` anchors on the WHOLE value; `grep` matches line by line, so a multi-line value
+      # whose every line is well-formed would have passed.
+      run: |
+        shape='^[a-z0-9]+/[a-z0-9_]+(/[a-z0-9]+)?$'
+        if [ -n "$PLATFORM" ] && ! [[ "$PLATFORM" =~ $shape ]]; then
+          echo "::error title=trivy-scan::platform must be empty or os/arch[/variant]; got an unexpected value"
+          exit 1
+        fi
     - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
         image-ref: ${{ inputs.image-ref }}
@@ -67,3 +90,5 @@ runs:
         TRIVY_PASSWORD: ${{ inputs.registry-password }}
         TRIVY_DB_REPOSITORY: "ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2"
         TRIVY_TIMEOUT: "10m"
+        # Trivy's --platform, by env: empty is the same as the flag being absent.
+        TRIVY_PLATFORM: ${{ inputs.platform }}

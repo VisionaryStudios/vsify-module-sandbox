@@ -1,0 +1,246 @@
+name: verify-image
+
+# The ONE definition of "this digest is verified" (ADR-P041; ADR-P048 v1.11; issue #672). Called by
+# build-verify-promote.yml before `promote` moves a tag, and by rollback-latest.yml before it moves
+# `:latest` back. Both used to carry their own copy of pull -> smoke test -> channel gate -> Trivy,
+# so a step added to one path could be missed on the other -- the emergency path, where review
+# pressure is lowest, being the likelier one to lag.
+#
+# EVERY MEMBER, NOT ONE. A tag moves to the whole index (`imagetools create` copies it). Verifying
+# one member -- what a single runner's `docker pull` resolves -- would let an index carrying a
+# second platform promote that member unverified. So `resolve` reads the index the digest actually
+# names and emits one leg per platform it carries (scripts/verify_matrix.py), each on a runner that
+# executes that platform NATIVELY: the smoke test needs native Linux Docker, and an emulated pass
+# is not a verification. A leg that fails fails this workflow, and the caller's next job -- with no
+# `always()` on it -- is skipped. No tag can move past an unverified member.
+
+on:
+  workflow_call:
+    inputs:
+      digest:
+        description: "sha256:... -- the INDEX digest the caller will move a tag to"
+        type: string
+        required: true
+      channel:
+        description: "prerelease | ga -- the .trivyignore channel gate's input"
+        type: string
+        required: true
+      require-platforms:
+        description: >
+          Comma-separated platform set the caller BUILT. When set, an index carrying anything else
+          refuses (a build that silently dropped a platform -- the #672 gap -- reddens here). Empty
+          for rollback, whose target may predate #672 and carry linux/amd64 only.
+        type: string
+        required: false
+        default: ""
+      observability:
+        description: "true on the build path: also run the non-gating full-picture scan and publish it"
+        type: boolean
+        required: false
+        default: false
+
+env:
+  # A called workflow does not inherit the caller's `env`; the repo variable is the one definition
+  # (see build-verify-promote.yml's env block for why it is a variable).
+  IMAGE: ${{ vars.IMAGE }}
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Inputs reach the shell through `env:`, never interpolated into a run body.
+      - name: Read the index and derive one leg per platform
+        id: matrix
+        env:
+          DIGEST: ${{ inputs.digest }}
+          REQUIRE: ${{ inputs.require-platforms }}
+        run: |
+          set -euo pipefail
+          # Whole-value match: `grep` would accept a valid first line followed by anything.
+          shape='^sha256:[0-9a-f]{64}$'
+          if ! [[ "$DIGEST" =~ $shape ]]; then
+            echo "::error::not a sha256 digest: ${DIGEST}"
+            exit 1
+          fi
+          docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST}" > index.json
+          if [ -n "$REQUIRE" ]; then
+            python3 scripts/verify_matrix.py --require "$REQUIRE" < index.json >> "$GITHUB_OUTPUT"
+          else
+            python3 scripts/verify_matrix.py < index.json >> "$GITHUB_OUTPUT"
+          fi
+
+  verify:
+    needs: resolve
+    name: verify (${{ matrix.platform }})
+    strategy:
+      # Every leg reports, so one platform's red does not hide another's; promote is skipped either way.
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    # Rollback runs this job too, mid-incident: a hung pull or smoke test must redden, not hold the
+    # tag for the 6h default. Trivy's own TRIVY_TIMEOUT bounds only the scans.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+      # SARIF -> code scanning (issue #354). Free here: this repo is PUBLIC (ADR-P041 Named
+      # Residual, v1.3). Requested on every call, so every caller must grant it -- a called
+      # workflow can only narrow its caller's grant, never widen it.
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      # A fresh runner with no retained Docker credentials -- pulling a package (even from a public
+      # repo, freshly-pushed GHCR packages can require auth) needs its own login.
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The runner map in scripts/verify_matrix.py is what makes each leg native. Prove it here
+      # rather than trust it: a wrong label would run the smoke test under emulation, or against the
+      # other member, and still go green.
+      - name: Refuse a runner that is not native for this leg
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in x86_64) native=amd64 ;; aarch64|arm64) native=arm64 ;; *) native="$(uname -m)" ;; esac
+          if [ "$native" != "$ARCH" ]; then
+            echo "::error::leg ${ARCH} landed on a ${native} runner -- fix RUNNERS in scripts/verify_matrix.py"
+            exit 1
+          fi
+
+      - name: Pull by digest (never by mutable tag)
+        env:
+          DIGEST: ${{ inputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
+        run: docker pull --platform "$PLATFORM" "${IMAGE}@${DIGEST}"
+      - name: Real end-to-end smoke test (native Linux Docker -- unix_socket works here)
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: python3 scripts/smoke_test.py "${IMAGE}@${DIGEST}"
+
+      # The .trivyignore escape hatch is rc-only (issue #628, ADR-P041 v1.8). A GA tag fails here
+      # while any suppression is active, BEFORE the scans below could honour it. Deterministic like
+      # the smoke test, so it runs after it and ahead of the feed-dependent scans. An empty or
+      # unknown channel fails closed.
+      - name: Channel gate -- GA refuses every .trivyignore suppression
+        env:
+          CHANNEL: ${{ inputs.channel }}
+        run: python3 scripts/trivyignore_channel_gate.py "$CHANNEL" .trivyignore
+
+      # ---- ADR-P041 supply-chain gate (issue #354) ---------------------------------------
+      # Scans the SAME member `docker pull` fetched and the smoke test exercised -- pinned by
+      # `platform`, because Trivy given an index otherwise picks one member itself.
+      #
+      # ORDERED AFTER THE SMOKE TEST, deliberately: the smoke test is the deterministic correctness
+      # signal; Trivy's verdict depends on a continuously-moving CVE feed, and a feed update must
+      # not mask a real wire or entrypoint regression by failing the job first.
+      #
+      # FAIL-CLOSED BY CONSTRUCTION. Trivy exits non-zero on any FATAL error (a trivy-db fetch
+      # failure, a GHCR rate limit, a timeout) independently of `exit-code`, so an unreachable
+      # scanner reddens this leg and the caller's next job is skipped. The ONLY change that would
+      # make this gate fail OPEN is adding `continue-on-error` to a scan step. Do not add it.
+      - name: Scan -- observability pass (records UNFIXED findings; does NOT gate)
+        if: inputs.observability
+        uses: ./.github/actions/trivy-scan
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ inputs.digest }}
+          platform: ${{ matrix.platform }}
+          format: sarif
+          output: trivy-results.sarif
+          ignore-unfixed: "false"
+          limit-severities-for-sarif: "true"
+          exit-code: "0"
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Scan -- GATE (findings with a fix available)
+        # `ignore-unfixed: true` is a policy call, not laziness: on this base every CRITICAL+HIGH
+        # was UNFIXED upstream, and gating on those would block every promote forever with no
+        # action available to anyone. Gating on FIXED findings reddens exactly when a remedy exists
+        # and has not been taken. The Dockerfile's `apt-get upgrade` layer (ADR-P041 v1.10) applies
+        # Debian's published fixes at build time, so a red here means a fix that layer cannot reach
+        # -- see CONTRIBUTING `B7`. The unfixed set is not hidden: the pass above publishes it.
+        # If this image ever gains a runtime dependency, re-evaluate: CONTRIBUTING step `B5`.
+        uses: ./.github/actions/trivy-scan
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ inputs.digest }}
+          platform: ${{ matrix.platform }}
+          format: table
+          ignore-unfixed: "true"
+          exit-code: "1"
+          # Reuse the DB the observability pass fetched (one GHCR pull per leg); without that pass
+          # there is no DB yet, so fetch it.
+          skip-db-update: ${{ inputs.observability && 'true' || 'false' }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+      # `always()` so the full picture reaches the Security tab even when the gate above is red --
+      # that is exactly when someone needs to read it. Fork PRs carry a read-only token and cannot
+      # upload, so they are excluded; `dependabot[bot]` gets the same read-only-token treatment even
+      # on a same-repo PR (see build-verify-promote.yml's `build` login comment), so it is excluded
+      # too, or this step would red with a permissions error indistinguishable from a CVE failure.
+      # One category per platform, so one leg's upload never replaces the other's alerts.
+      - name: Publish to code scanning (never gates)
+        if: always() && inputs.observability && (github.event_name == 'push' || (github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]'))
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-image-build-${{ matrix.arch }}
+
+      - name: Retain the raw report (survives log expiry)
+        if: always() && inputs.observability
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-sarif-${{ github.sha }}-${{ matrix.arch }}
+          path: trivy-results.sarif
+          retention-days: 90
+
+      - name: Verification summary
+        if: always()
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          DIGEST: ${{ inputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -uo pipefail
+          {
+            echo "### verify (${PLATFORM})"
+            echo
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| channel | \`${CHANNEL}\` |"
+            echo "| image digest (index) | \`${DIGEST}\` |"
+            echo "| platform | \`${PLATFORM}\` on \`$(uname -m)\` |"
+            echo "| base pin | \`$(grep -m1 '^FROM ' Dockerfile | sed -e 's/^FROM //' -e 's/ AS .*$//')\` |"
+            echo "| gate | CRITICAL,HIGH with a fix available |"
+            echo
+            echo "#### Active .trivyignore suppressions"
+            if grep -qvE '^[[:space:]]*(#|$)' .trivyignore 2>/dev/null; then
+              grep -vE '^[[:space:]]*(#|$)' .trivyignore \
+                | while IFS= read -r suppression; do printf -- "- \`%s\`\n" "$suppression"; done
+              echo
+              echo "> A suppression is a DELAY, not a waiver -- each expires on its \`exp:\` date, and a GA build refuses it."
+            else
+              echo "- none"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

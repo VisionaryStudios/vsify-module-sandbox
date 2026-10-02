@@ -256,6 +256,18 @@ Entrypoint resolution, transport plumbing, `Dockerfile`, CI config. Image-repo-o
       Never widen it to `full-upgrade` or add an `apt-get install`. `upgrade` installs and removes
       nothing, which is what keeps the package set the base's.
 
+- [ ] **`B8` — Adding or removing a published platform** (issue #672, ADR-P048 v1.11). The set is
+      stated once, as `build`'s `PLATFORMS` in `.github/workflows/build-verify-promote.yml`.
+      `verify` refuses an index that does not carry exactly that set, and it runs one leg per
+      platform on a runner that executes it **natively**. A new platform therefore needs a row in
+      `RUNNERS` in `scripts/verify_matrix.py` in the same change, or `verify` refuses it on the
+      release tag. Never point a leg at a runner that emulates its platform: the smoke test needs
+      native Linux Docker (ADR-P041), and each leg checks its own runner's architecture.
+      Verification lives only in `.github/workflows/verify-image.yml`, which `promote` and
+      `.github/workflows/rollback-latest.yml` both call. Change it there, never in a caller.
+      `tests/test_verify_matrix.py` and
+      `vsify-enterprise-mcp:tests/test_sandbox_multi_arch_publish.py` pin all of this.
+
 ### Reviewing a Dependabot base-image PR
 
 1. Only the digest moves; the tag is unchanged (`python:3.12-slim`). Dependabot bumps
