@@ -35,7 +35,7 @@
 # a `FROM ... AS builder` stage plus one `COPY --from=builder` lands above it without touching the
 # WORKDIR/COPY/USER/ENTRYPOINT lines below, and with no change to build → verify → promote (which
 # is keyed on the pushed digest, never on this file's internal shape). See step `B5`.
-FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f AS runtime
+FROM python:3.12-slim@sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d AS runtime
 
 # Apply Debian's published fixes the pinned digest predates (ADR-P041 v1.10). Upstream rebuilds
 # python:3.12-slim on its own schedule, often days after Debian ships a fix, and in that gap every
