@@ -1,0 +1,5 @@
+# -*- coding: vsify-no-such-codec -*-
+
+
+def serve(payload: bytes) -> bytes:
+    return payload

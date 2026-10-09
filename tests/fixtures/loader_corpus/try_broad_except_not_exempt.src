@@ -1,0 +1,8 @@
+try:
+    import vsify_corpus_absent_pkg
+except Exception:  # broad: deliberately NOT an exemption
+    vsify_corpus_absent_pkg = None
+
+
+def serve(payload: bytes) -> bytes:
+    return payload

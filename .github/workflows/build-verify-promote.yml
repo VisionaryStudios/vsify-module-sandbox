@@ -167,7 +167,7 @@ jobs:
       # and COPYs; nothing compiles). Verification never runs emulated -- each member is pulled and
       # smoke-tested on its own native runner in verify-image.yml.
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # GITHUB_TOKEN is forced READ-ONLY (and secrets are withheld) on any `pull_request` run
       # whose actor is `dependabot[bot]` -- GitHub treats a Dependabot PR the same as a fork PR
       # for this purpose, even though it is same-repo. Without GHCR_PUSH_TOKEN, every Dependabot
@@ -223,7 +223,7 @@ jobs:
       CHANNEL: ${{ needs.mirror-guard.outputs.channel }}
       DIGEST: ${{ needs.build.outputs.digest }}
     steps:
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io

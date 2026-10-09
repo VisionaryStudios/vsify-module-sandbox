@@ -52,6 +52,14 @@ RUN apt-get update \
 WORKDIR /app
 COPY --chown=65534:65534 vsify_sandbox/ /app/vsify_sandbox/
 
+# The loader this image runs, as one hash: sha256 over module_loader.py, import_closure.py and
+# package_tree.py concatenated in that order (issue #862). A consumer image built FROM this one
+# inherits the label, so the host can detect a consumer image built on an older loader before it
+# launches a `layout: package` module (`runtime_image_loader_skew`). It is a SKEW DETECTOR, not a
+# security control: a consumer image can set any label. A literal, not a build-arg (issue #352 removed
+# build-time indirection); tests/test_loader_label_pin.py recomputes it and prints the new value.
+LABEL org.vsify.sandbox.loader_sha256="d67c81f49886f07d7200d077f1eb147afa4f8e77b684b145e5cdfe100e4d01ca"
+
 # Matches the host's default run_user ("65534:65534" — container_backend.py). Switched to LAST,
 # after WORKDIR/COPY (which need root to create /app) — a non-root UID cannot create a directory
 # under a root-owned "/". A UID with no passwd entry inside the image is intentional (least

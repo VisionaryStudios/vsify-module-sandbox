@@ -1,0 +1,10 @@
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    pass
+else:
+    import vsify_corpus_absent_pkg  # the else branch DOES run at import
+
+
+def serve(payload: bytes) -> bytes:
+    return payload

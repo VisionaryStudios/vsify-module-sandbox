@@ -1,0 +1,7 @@
+import json
+
+from sqlalchemy.orm import Session
+
+
+def serve(payload: bytes) -> bytes:
+    return json.dumps(Session is not None).encode()

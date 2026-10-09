@@ -188,6 +188,8 @@ see.
 ### Not a wire-contract change
 
 Entrypoint resolution, transport plumbing, `Dockerfile`, CI config. Image-repo-only, no host PR.
+The exception is a change to the entrypoint loader or its import analyser: those two files have
+host copies, and `M1` below applies.
 
 ---
 
@@ -268,6 +270,27 @@ Entrypoint resolution, transport plumbing, `Dockerfile`, CI config. Image-repo-o
       `tests/test_verify_matrix.py` and
       `vsify-enterprise-mcp:tests/test_sandbox_multi_arch_publish.py` pin all of this.
 
+- [ ] **`B9` — If the base's Python MINOR changes, regenerate the stdlib literal** (issue #771,
+      ADR-P039 v1.3). `vsify_sandbox/import_closure.py` refuses any `python_module` entrypoint
+      that imports a top-level name outside `_STDLIB`, a FROZEN copy of the image interpreter's
+      `sys.stdlib_module_names`. It is never read at runtime, so the host reaches the image's
+      verdict on any host Python. A minor change is an ADR amendment under `B1`, never a Dependabot
+      merge: a digest-only bump of the same tag leaves the stdlib alone, and this step does not
+      apply to it. When the minor does change:
+      1. Regenerate the literal on the NEW image's own interpreter:
+
+         ```bash
+         docker run --rm python:<minor>-slim python -c "import sys; print(sorted(sys.stdlib_module_names))"
+         ```
+
+      2. Replace the `_STDLIB` set with that output, and set `_STDLIB_PYTHON` to the new minor.
+      3. Run `tests/test_import_closure.py` on an interpreter of the new minor.
+         `test_stdlib_literal_python_matches_the_image_base` pins `_STDLIB_PYTHON` to the
+         `FROM python:<minor>-slim` line in `Dockerfile` and reddens on every interpreter until step 2
+         is done. `test_stdlib_literal_is_in_sync_with_the_image_python` compares the literal itself,
+         and skips on any other minor, so a green run on your laptop's Python proves nothing.
+      4. `vsify_sandbox/import_closure.py` changed, so `M1` applies.
+
 ### Reviewing a Dependabot base-image PR
 
 1. Only the digest moves; the tag is unchanged (`python:3.12-slim`). Dependabot bumps
@@ -277,6 +300,42 @@ Entrypoint resolution, transport plumbing, `Dockerfile`, CI config. Image-repo-o
    real-Docker e2e suite against it, and runs the `verify` Trivy gate over it (ADR-P048 v1.10).
 3. Merge (in the host). The next framework release's mirror tag builds it, and `promote` tags
    `:<framework-version>` (and, on GA, `:latest`) from that already-verified digest.
+
+---
+
+## Files mirrored into the host package (issue #772, ADR-P048 v1.12)
+
+Three files in this tree have byte-identical copies inside the host's Python package, so the host
+reaches the image's exact verdict on an entrypoint (and, for `layout: package`, signs the exact file
+map the image re-derives — issue #862), and a consumer's tests can load one with the image's real
+loader (`vsify_enterprise_mcp.testing.load_sandbox_entrypoint`):
+
+| Source of truth (edit here)          | Host copy (never edit)                                                         |
+| ------------------------------------ | ------------------------------------------------------------------------------ |
+| `vsify_sandbox/import_closure.py`    | `vsify-enterprise-mcp:vsify_enterprise_mcp/_sandbox_mirror/import_closure.py`  |
+| `vsify_sandbox/module_loader.py`     | `vsify-enterprise-mcp:vsify_enterprise_mcp/_sandbox_mirror/module_loader.py`   |
+| `vsify_sandbox/package_tree.py`      | `vsify-enterprise-mcp:vsify_enterprise_mcp/_sandbox_mirror/package_tree.py`    |
+
+- [ ] **`M1` — After any change to any of these files, copy it to the host package in the same PR,
+      and update the Dockerfile's `org.vsify.sandbox.loader_sha256` LABEL** (the sha256 of
+      `vsify_sandbox/module_loader.py`, `vsify_sandbox/import_closure.py` and
+      `vsify_sandbox/package_tree.py` concatenated in that order; `tests/test_loader_label_pin.py`
+      prints the new value). From the host repository's root:
+
+      ```bash
+      cp sandbox/vsify_sandbox/import_closure.py vsify_enterprise_mcp/_sandbox_mirror/import_closure.py
+      cp sandbox/vsify_sandbox/module_loader.py vsify_enterprise_mcp/_sandbox_mirror/module_loader.py
+      cp sandbox/vsify_sandbox/package_tree.py vsify_enterprise_mcp/_sandbox_mirror/package_tree.py
+      ```
+
+      Then run `vsify-enterprise-mcp:tests/test_sandbox_loader_parity.py`. It pins each copy by
+      sha256 and prints this exact `cp` when one drifts, runs the shared corpus
+      (`tests/fixtures/loader_corpus/`) through both copies, and checks the dotted-ref rule against
+      the host's own. Both files must stay mirrorable: stdlib-only, no relative import, and only
+      underscored top-level names (an unprefixed name would land in the host's public surface pin).
+      A new corpus case goes in `tests/fixtures/loader_corpus/CASES.json`, and the sandbox's tests
+      and the host's parity test both pick it up. Nothing else is needed for the image repository:
+      the release mirror copies all of `sandbox/` already.
 
 ---
 

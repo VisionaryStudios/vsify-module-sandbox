@@ -1,0 +1,2 @@
+def serve(payload: bytes -> bytes:
+    return payload

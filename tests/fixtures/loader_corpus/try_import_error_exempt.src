@@ -1,0 +1,18 @@
+try:
+    import vsify_corpus_absent_pkg
+except ImportError:
+    vsify_corpus_absent_pkg = None
+
+try:
+    from vsify_corpus_absent_pkg.fast import dumps
+except (OSError, ModuleNotFoundError):
+    dumps = None
+
+try:
+    from . import wire
+except ImportError:
+    wire = None
+
+
+def serve(payload: bytes) -> bytes:
+    return payload

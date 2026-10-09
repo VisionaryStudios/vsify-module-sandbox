@@ -1,0 +1,5 @@
+from ..shared import helpers
+
+
+def serve(payload: bytes) -> bytes:
+    return helpers.run(payload)

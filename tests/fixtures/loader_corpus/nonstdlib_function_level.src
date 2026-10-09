@@ -1,0 +1,7 @@
+import json
+
+
+def serve(payload: bytes) -> bytes:
+    import vsify_corpus_absent_pkg  # deferred, but still not in the image
+
+    return json.dumps(vsify_corpus_absent_pkg.handle(payload)).encode()

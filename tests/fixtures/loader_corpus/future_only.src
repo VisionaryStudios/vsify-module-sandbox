@@ -1,0 +1,5 @@
+from __future__ import annotations
+
+
+def serve(payload: bytes) -> bytes:
+    return payload[::-1]

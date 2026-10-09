@@ -1,0 +1,7 @@
+import vsify_corpus_absent_pkg
+
+
+def serve(payload: bytes) -> bytes:
+    from .wire import handle  # a relative import ANYWHERE outranks the non-stdlib one above
+
+    return handle(vsify_corpus_absent_pkg, payload)

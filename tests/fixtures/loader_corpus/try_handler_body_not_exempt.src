@@ -1,0 +1,8 @@
+try:
+    import json
+except ImportError:
+    import vsify_corpus_absent_pkg as json  # only the guarded BODY is exempt, never a handler
+
+
+def serve(payload: bytes) -> bytes:
+    return json.dumps(len(payload)).encode()

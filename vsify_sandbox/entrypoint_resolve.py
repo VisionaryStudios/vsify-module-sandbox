@@ -8,22 +8,14 @@ this module does NOT re-resolve a file path from the ref (there is no repo tree 
 container to resolve against). It exists so the image independently RE-VALIDATES the ref's shape
 (defense-in-depth: never trust a host-supplied string blindly) using the identical rule, and uses
 the ref for the loaded module's reported name / log messages.
+
+A RE-EXPORT SHIM: the implementation lives in the pure ``import_closure`` module (which the host
+mirrors byte-identically). This shim imports ONLY that module — never the exec-capable
+``module_loader`` — so validating a ref can never pull a loader into scope.
 """
 from __future__ import annotations
 
+from .import_closure import _EntrypointRefMalformed, _validate_dotted_ref
 
-class EntrypointRefMalformed(Exception):
-    """The dotted ref failed shape validation — never trust it for loading or logging as-is."""
-
-
-def validate_dotted_ref(ref: str) -> tuple[str, ...]:
-    """Validate ``ref`` against the SAME rule ``entrypoint_ref.py``'s ``_dotted_ref_candidates``
-    enforces host-side: every dot-separated segment MUST be ``str.isascii()`` AND
-    ``str.isidentifier()`` (rejects ``/``, ``-``, leading digits, empty segments, and any
-    non-ASCII homoglyph segment). Returns the validated segment tuple. Raises
-    :class:`EntrypointRefMalformed` on any violation."""
-    ref = str(ref or "")
-    segments = tuple(ref.split("."))
-    if not segments or not all(seg.isascii() and seg.isidentifier() for seg in segments):
-        raise EntrypointRefMalformed("entrypoint_ref_malformed")
-    return segments
+EntrypointRefMalformed = _EntrypointRefMalformed
+validate_dotted_ref = _validate_dotted_ref

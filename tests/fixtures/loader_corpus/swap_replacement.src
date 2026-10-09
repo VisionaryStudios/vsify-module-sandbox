@@ -1,0 +1,6 @@
+"""Written over the entrypoint AFTER classification. It must never run: the loader executes the bytes
+it classified, not a re-read of the path."""
+
+
+def serve(payload: bytes) -> bytes:
+    return b"swapped"

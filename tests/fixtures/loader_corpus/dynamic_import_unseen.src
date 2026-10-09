@@ -1,0 +1,9 @@
+"""A documented residual (ADR-P039): the analyser is static, so a dynamic import passes it. The image
+still refuses categorically when the import runs (``entrypoint_import_failed:ModuleNotFoundError``)."""
+import importlib
+
+_absent = importlib.import_module("vsify_corpus_absent_pkg")
+
+
+def serve(payload: bytes) -> bytes:
+    return payload

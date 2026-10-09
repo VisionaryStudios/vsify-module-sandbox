@@ -1,0 +1,8 @@
+"""The m365 multi-file shape: an entrypoint that reaches its sibling with a relative import."""
+from __future__ import annotations
+
+from . import wire
+
+
+def serve(payload: bytes) -> bytes:
+    return wire.handle(payload)

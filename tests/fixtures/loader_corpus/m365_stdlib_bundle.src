@@ -1,0 +1,23 @@
+"""The m365 generated single-file bundle shape: stdlib-only top-level imports, everything inlined."""
+from __future__ import annotations
+
+import _thread
+import json
+import sys
+import types
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree
+from urllib.parse import urlencode
+
+_WIRE = types.SimpleNamespace(version=1)
+
+
+def _encode(obj) -> bytes:
+    return json.dumps(obj, sort_keys=True).encode("utf-8")
+
+
+def serve(payload: bytes) -> bytes:
+    import base64  # a function-level stdlib import is fine
+
+    return base64.b64decode(base64.b64encode(payload))

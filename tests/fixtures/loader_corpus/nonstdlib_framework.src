@@ -1,0 +1,7 @@
+"""The vsify-me-mcp ``lib.server`` shape: framework + sibling-package absolute imports."""
+import lib.x
+import vsify_enterprise_mcp.capability_loader
+
+
+def serve(payload: bytes) -> bytes:
+    return lib.x.handle(vsify_enterprise_mcp.capability_loader, payload)

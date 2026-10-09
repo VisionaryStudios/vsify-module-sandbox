@@ -1,0 +1,5 @@
+import vsify_corpus_absent_pkg
+
+
+def serve(payload: bytes) -> bytes:
+    return vsify_corpus_absent_pkg.handle(payload)
