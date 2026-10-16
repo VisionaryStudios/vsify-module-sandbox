@@ -29,9 +29,19 @@ inputs:
     required: false
     default: "0"
   skip-db-update:
-    description: "true to reuse the DB an earlier pass in the same job already fetched"
+    description: >
+      true to scan with the DB already in the cache dir (fetched by an earlier pass, or handed over as
+      an artifact) and never download one. Reaches Trivy as TRIVY_SKIP_DB_UPDATE: the pinned
+      trivy-action declares no such input, so passing it through `with:` was silently ignored.
     required: false
     default: "false"
+  cache:
+    description: >
+      false to skip trivy-action's own actions/cache restore and save of the DB. A caller scanning
+      with a DB it was handed must set this: the restore runs inside the scan step, after any
+      download, and its prefix restore-key can put back a DB of any age over the one handed over.
+    required: false
+    default: "true"
   limit-severities-for-sarif:
     required: false
     default: "false"
@@ -79,7 +89,7 @@ runs:
         severity: ${{ inputs.severity }}
         ignore-unfixed: ${{ inputs.ignore-unfixed }}
         exit-code: ${{ inputs.exit-code }}
-        skip-db-update: ${{ inputs.skip-db-update }}
+        cache: ${{ inputs.cache }}
         limit-severities-for-sarif: ${{ inputs.limit-severities-for-sarif }}
         trivyignores: ${{ inputs.trivyignores }}
       env:
@@ -92,3 +102,6 @@ runs:
         TRIVY_TIMEOUT: "10m"
         # Trivy's --platform, by env: empty is the same as the flag being absent.
         TRIVY_PLATFORM: ${{ inputs.platform }}
+        # Trivy's --skip-db-update, by env (see the input). With no DB in the cache dir Trivy refuses
+        # to scan, so a caller that skips the update fails closed when nothing was handed over.
+        TRIVY_SKIP_DB_UPDATE: ${{ inputs.skip-db-update }}
