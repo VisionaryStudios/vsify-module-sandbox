@@ -1,7 +1,9 @@
 # vsify-module-sandbox — ADR-P041 sandbox execution image.
 #
 # Minimal surface by design (ADR-P017's "least new infrastructure" philosophy): stdlib-only, no
-# pip installs, non-root, no shell in the final image. The host (vsify-enterprise-mcp's
+# pip installs, non-root. The base image's /bin/sh is kept on purpose: the egress gateway's
+# per-container `--health-cmd` (ADR-P058 §5) runs through it, and the image itself declares no
+# HEALTHCHECK, so module containers never run a probe. The host (vsify-enterprise-mcp's
 # ContainerIsolationBackend) supplies every runtime flag (--network, --read-only, --cap-drop,
 # resource caps) — this image does not and cannot loosen any of them; it just has to behave
 # correctly INSIDE whatever containment the host already constructed.

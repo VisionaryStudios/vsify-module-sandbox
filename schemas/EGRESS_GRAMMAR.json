@@ -1,7 +1,227 @@
 {
-  "egress_grammar_pin_version": 1,
+  "address_vectors": [
+    {
+      "address": "140.82.112.3",
+      "name": "global_v4",
+      "verdict": "allowed"
+    },
+    {
+      "address": "2606:4700:4700::1111",
+      "name": "global_v6",
+      "verdict": "allowed"
+    },
+    {
+      "address": "10.0.0.1",
+      "name": "rfc1918_10",
+      "verdict": "private_address"
+    },
+    {
+      "address": "172.16.0.1",
+      "name": "rfc1918_172_16",
+      "verdict": "private_address"
+    },
+    {
+      "address": "172.31.255.255",
+      "name": "rfc1918_172_31_upper_edge",
+      "verdict": "private_address"
+    },
+    {
+      "address": "172.32.0.1",
+      "name": "just_outside_rfc1918_172",
+      "verdict": "allowed"
+    },
+    {
+      "address": "192.168.1.1",
+      "name": "rfc1918_192_168",
+      "verdict": "private_address"
+    },
+    {
+      "address": "127.0.0.1",
+      "name": "loopback_v4",
+      "verdict": "loopback"
+    },
+    {
+      "address": "127.255.255.254",
+      "name": "loopback_v4_whole_block",
+      "verdict": "loopback"
+    },
+    {
+      "address": "::1",
+      "name": "loopback_v6",
+      "verdict": "loopback"
+    },
+    {
+      "address": "169.254.169.254",
+      "name": "metadata_v4",
+      "verdict": "metadata"
+    },
+    {
+      "address": "fd00:ec2::254",
+      "name": "metadata_v6_aws",
+      "verdict": "metadata"
+    },
+    {
+      "address": "fd00:ec2::254%eth0",
+      "name": "metadata_v6_with_zone_id",
+      "verdict": "metadata"
+    },
+    {
+      "address": "169.254.1.1",
+      "name": "link_local_v4",
+      "verdict": "link_local"
+    },
+    {
+      "address": "fe80::1",
+      "name": "link_local_v6",
+      "verdict": "link_local"
+    },
+    {
+      "address": "fd12:3456::1",
+      "name": "unique_local_v6",
+      "verdict": "private_address"
+    },
+    {
+      "address": "fec0::1",
+      "name": "site_local_v6_deprecated",
+      "verdict": "private_address"
+    },
+    {
+      "address": "100.64.0.1",
+      "name": "cgnat_shared_space",
+      "verdict": "not_global"
+    },
+    {
+      "address": "0.0.0.0",
+      "name": "unspecified_v4",
+      "verdict": "not_global"
+    },
+    {
+      "address": "::",
+      "name": "unspecified_v6",
+      "verdict": "not_global"
+    },
+    {
+      "address": "224.0.0.1",
+      "name": "multicast_v4",
+      "verdict": "not_global"
+    },
+    {
+      "address": "ff02::1",
+      "name": "multicast_v6",
+      "verdict": "not_global"
+    },
+    {
+      "address": "255.255.255.255",
+      "name": "broadcast_v4",
+      "verdict": "not_global"
+    },
+    {
+      "address": "192.0.2.1",
+      "name": "documentation_v4",
+      "verdict": "not_global"
+    },
+    {
+      "address": "::ffff:10.0.0.1",
+      "name": "ipv4_mapped_private",
+      "verdict": "private_address"
+    },
+    {
+      "address": "::ffff:169.254.169.254",
+      "name": "ipv4_mapped_metadata",
+      "verdict": "metadata"
+    },
+    {
+      "address": "::ffff:140.82.112.3",
+      "name": "ipv4_mapped_global",
+      "verdict": "allowed"
+    },
+    {
+      "address": "::10.0.0.1",
+      "name": "ipv4_compatible_private",
+      "verdict": "private_address"
+    },
+    {
+      "address": "::127.0.0.1",
+      "name": "ipv4_compatible_loopback",
+      "verdict": "loopback"
+    },
+    {
+      "address": "64:ff9b::808:808",
+      "name": "nat64_well_known_prefix",
+      "verdict": "nat64"
+    },
+    {
+      "address": "64:ff9b:1::a00:1",
+      "name": "nat64_local_use_prefix",
+      "verdict": "nat64"
+    },
+    {
+      "address": "2002:c0a8:101::1",
+      "name": "sixtofour_wrapping_private",
+      "verdict": "private_address"
+    },
+    {
+      "address": "2002:8c52:7003::1",
+      "name": "sixtofour_wrapping_global",
+      "verdict": "not_global"
+    },
+    {
+      "address": "2001:0:4136:e378:8000:63bf:f5ff:fffe",
+      "name": "teredo_wrapping_private",
+      "verdict": "private_address"
+    },
+    {
+      "address": "2001:0:4136:e378:8000:63bf:73ad:8ffc",
+      "name": "teredo_wrapping_global",
+      "verdict": "not_global"
+    },
+    {
+      "address": "",
+      "name": "invalid_empty",
+      "verdict": "invalid_address"
+    },
+    {
+      "address": "example.com",
+      "name": "invalid_hostname",
+      "verdict": "invalid_address"
+    },
+    {
+      "address": "[::1]",
+      "name": "invalid_bracketed_v6",
+      "verdict": "invalid_address"
+    },
+    {
+      "address": " 10.0.0.1",
+      "name": "invalid_surrounding_whitespace",
+      "verdict": "invalid_address"
+    },
+    {
+      "address": "2852039166",
+      "name": "invalid_decimal_integer_string",
+      "verdict": "invalid_address"
+    },
+    {
+      "address": 167772161,
+      "name": "invalid_integer",
+      "verdict": "invalid_address"
+    },
+    {
+      "address": true,
+      "name": "invalid_bool",
+      "verdict": "invalid_address"
+    },
+    {
+      "address": null,
+      "name": "invalid_null",
+      "verdict": "invalid_address"
+    }
+  ],
+  "default_egress_ports": [
+    443
+  ],
+  "egress_grammar_pin_version": 2,
   "env_var": "SANDBOX_EGRESS_ALLOW",
-  "framework_version": "0.16.0-rc.2",
+  "framework_version": "0.16.0-rc.3",
   "generated_by": "scripts/egress_grammar_vectors.py",
   "grammar_vectors": [
     {
@@ -937,6 +1157,150 @@
       "negative_control": false,
       "sandbox_decision": "deny",
       "sandbox_env": "graph.microsoft.com"
+    }
+  ],
+  "port_vectors": [
+    {
+      "error": null,
+      "name": "default_https_only",
+      "ports": [
+        443
+      ],
+      "valid_ports": [
+        443
+      ]
+    },
+    {
+      "error": null,
+      "name": "lowest_port",
+      "ports": [
+        1
+      ],
+      "valid_ports": [
+        1
+      ]
+    },
+    {
+      "error": null,
+      "name": "highest_port",
+      "ports": [
+        65535
+      ],
+      "valid_ports": [
+        65535
+      ]
+    },
+    {
+      "error": null,
+      "name": "several_ports",
+      "ports": [
+        443,
+        8443
+      ],
+      "valid_ports": [
+        443,
+        8443
+      ]
+    },
+    {
+      "error": null,
+      "name": "duplicates_collapse",
+      "ports": [
+        443,
+        443
+      ],
+      "valid_ports": [
+        443
+      ]
+    },
+    {
+      "error": "egress_ports_out_of_range",
+      "name": "error_port_zero",
+      "ports": [
+        0
+      ],
+      "valid_ports": null
+    },
+    {
+      "error": "egress_ports_out_of_range",
+      "name": "error_port_above_range",
+      "ports": [
+        65536
+      ],
+      "valid_ports": null
+    },
+    {
+      "error": "egress_ports_out_of_range",
+      "name": "error_negative_port",
+      "ports": [
+        -1
+      ],
+      "valid_ports": null
+    },
+    {
+      "error": "egress_ports_empty",
+      "name": "error_empty_policy",
+      "ports": [],
+      "valid_ports": null
+    },
+    {
+      "error": "egress_ports_not_integer",
+      "name": "error_bool_is_not_a_port",
+      "ports": [
+        true
+      ],
+      "valid_ports": null
+    },
+    {
+      "error": "egress_ports_not_integer",
+      "name": "error_string_port",
+      "ports": [
+        "443"
+      ],
+      "valid_ports": null
+    },
+    {
+      "error": "egress_ports_not_integer",
+      "name": "error_float_port",
+      "ports": [
+        443.5
+      ],
+      "valid_ports": null
+    },
+    {
+      "error": "egress_ports_not_integer",
+      "name": "error_null_port",
+      "ports": [
+        null
+      ],
+      "valid_ports": null
+    },
+    {
+      "error": "egress_ports_out_of_range",
+      "name": "error_one_bad_port_poisons_the_policy",
+      "ports": [
+        443,
+        0
+      ],
+      "valid_ports": null
+    },
+    {
+      "error": "egress_ports_malformed",
+      "name": "error_string_policy",
+      "ports": "443",
+      "valid_ports": null
+    },
+    {
+      "error": "egress_ports_malformed",
+      "name": "error_integer_policy",
+      "ports": 443,
+      "valid_ports": null
+    },
+    {
+      "error": "egress_ports_malformed",
+      "name": "error_null_policy",
+      "ports": null,
+      "valid_ports": null
     }
   ],
   "wildcard_min_labels": 2,

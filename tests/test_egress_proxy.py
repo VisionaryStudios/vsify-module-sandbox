@@ -33,7 +33,7 @@ from pathlib import Path
 
 import pytest
 
-from vsify_sandbox import egress_proxy, entrypoint
+from vsify_sandbox import egress_proxy, egress_wire, entrypoint
 from vsify_sandbox.egress_proxy import (
     EgressGrammarError,
     EgressPolicy,
@@ -235,15 +235,23 @@ def start_proxy():
 
 
 def _ask(address: tuple[str, int], request: bytes) -> tuple[socket.socket, bytes]:
-    """Send a request head to the proxy; return the socket and the status line it answered."""
+    """Send a request head to the proxy; return the socket and the status line it answered.
+
+    Every byte read past the head is DROPPED. That is safe only because no caller sends early bytes
+    or reads relayed bytes before sending; a test that does needs the head/remainder split of
+    ``test_egress_gateway._ask`` (issue 1271), or its next recv waits out the timeout."""
     client = socket.create_connection(address, timeout=_TIMEOUT_S)
-    client.sendall(request)
     buf = b""
-    while b"\r\n\r\n" not in buf:
-        chunk = client.recv(4096)
-        if not chunk:
-            break
-        buf += chunk
+    try:
+        client.sendall(request)
+        while b"\r\n\r\n" not in buf:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+    except BaseException:
+        client.close()
+        raise
     return client, buf.split(b"\r\n", 1)[0]
 
 
@@ -576,3 +584,329 @@ def test_surrounding_whitespace_is_still_stripped_not_refused():
 def test_an_ipv6_literal_keeps_its_meaning():
     """The precheck is a deny-list, not an LDH allow-list, so ``::1`` still matches ``::1``."""
     assert host_matches_egress_allow("::1", ["::1"]) is True
+
+
+# ─────────────────────────────────────────── the upstream chain (ADR-P058 §3)
+
+_CHAIN_TOKEN = "chain-T0ken_abcdefghijklmnopqrstuvwxyz-0123456789"
+
+
+class _FakeGateway:
+    """A one-shot stand-in for the session gateway: records the CONNECT head it is sent, answers
+    ``status``, and on 200 echoes the tunnel bytes (recording them, as the destination would)."""
+
+    def __init__(self, status: bytes = b"HTTP/1.1 200 Connection Established\r\n\r\n") -> None:
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(4)
+        self.port = self.sock.getsockname()[1]
+        self.status = status
+        self.head = b""
+        self.tunnel = b""
+        self.accepted = 0
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self) -> None:
+        try:
+            conn, _ = self.sock.accept()
+        except OSError:
+            return
+        self.accepted += 1
+        with conn:
+            conn.settimeout(_TIMEOUT_S)
+            try:
+                buf = b""
+                while b"\r\n\r\n" not in buf:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        return
+                    buf += chunk
+                self.head, _, rest = buf.partition(b"\r\n\r\n")
+                conn.sendall(self.status)
+                if not self.status.startswith(b"HTTP/1.1 200"):
+                    return
+                self.tunnel += rest
+                if rest:
+                    conn.sendall(rest)
+                while data := conn.recv(4096):
+                    self.tunnel += data
+                    conn.sendall(data)
+            except OSError:
+                return
+
+    def close(self) -> None:
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        self.sock.close()
+        self._thread.join(timeout=_TIMEOUT_S)
+
+
+@pytest.fixture
+def fake_gateway():
+    made: list[_FakeGateway] = []
+
+    def _make(**kwargs) -> _FakeGateway:
+        gw = _FakeGateway(**kwargs)
+        made.append(gw)
+        return gw
+
+    yield _make
+    for gw in made:
+        gw.close()
+
+
+def _chain_env(gw: _FakeGateway, allow: str = "allowed.example") -> dict[str, str]:
+    return {
+        "SANDBOX_EGRESS_ALLOW": allow,
+        "SANDBOX_EGRESS_UPSTREAM": f"127.0.0.1:{gw.port}",
+        "VSIFY_EGRESS_TOKEN": _CHAIN_TOKEN,
+    }
+
+
+def test_the_default_path_has_no_upstream_and_dials_directly(start_proxy, upstream):
+    """Byte-identical default: no SANDBOX_EGRESS_UPSTREAM, no chain, no token on any wire."""
+    env = {"SANDBOX_EGRESS_ALLOW": "127.0.0.1"}
+    proxy = egress_proxy.install(env)
+    try:
+        assert proxy._server.upstream is None
+        client, status = _ask(proxy.address, f"CONNECT 127.0.0.1:{upstream.port} HTTP/1.1\r\n\r\n".encode())
+        with client:
+            assert status == b"HTTP/1.1 200 Connection Established"
+            client.sendall(b"direct")
+            assert client.recv(4096) == b"direct"
+    finally:
+        proxy.close()
+    assert upstream.accepted == 1
+
+
+def test_the_token_is_popped_even_on_the_default_path():
+    env = {"SANDBOX_EGRESS_ALLOW": "graph.microsoft.com", "VSIFY_EGRESS_TOKEN": _CHAIN_TOKEN}
+    proxy = egress_proxy.install(env)
+    proxy.close()
+    assert "VSIFY_EGRESS_TOKEN" not in env
+
+
+def test_an_allowed_connect_is_chained_with_the_token(fake_gateway, capsys):
+    gw = fake_gateway()
+    env = _chain_env(gw)
+    proxy = egress_proxy.install(env)
+    try:
+        assert "VSIFY_EGRESS_TOKEN" not in env, "module code must not inherit the token"
+        client, status = _ask(proxy.address, b"CONNECT Allowed.Example.:443 HTTP/1.1\r\n\r\n")
+        with client:
+            assert status == b"HTTP/1.1 200 Connection Established"
+            client.sendall(b"tls-bytes")
+            assert client.recv(4096) == b"tls-bytes"
+    finally:
+        proxy.close()
+    lines = gw.head.split(b"\r\n")
+    assert lines[0] == b"CONNECT allowed.example:443 HTTP/1.1", "the NORMALIZED host is chained"
+    assert f"Proxy-Authorization: Bearer {_CHAIN_TOKEN}".encode() in lines
+    assert _CHAIN_TOKEN.encode() not in gw.tunnel, "the token never enters the tunnel"
+    captured = capsys.readouterr()
+    assert _CHAIN_TOKEN not in captured.err and captured.out == ""
+
+
+def test_plain_http_rides_a_connect_tunnel_without_the_clients_proxy_credentials(fake_gateway):
+    gw = fake_gateway()
+    proxy = egress_proxy.install(_chain_env(gw))
+    try:
+        client = socket.create_connection(proxy.address, timeout=_TIMEOUT_S)
+        with client:
+            client.sendall(
+                b"GET http://allowed.example/x HTTP/1.1\r\nHost: allowed.example\r\n"
+                b"Proxy-Authorization: Basic c2VjcmV0\r\n\r\n"
+            )
+            echoed = b""
+            while b"\r\n\r\n" not in echoed:
+                chunk = client.recv(4096)
+                if not chunk:
+                    break
+                echoed += chunk
+    finally:
+        proxy.close()
+    assert gw.head.split(b"\r\n")[0] == b"CONNECT allowed.example:80 HTTP/1.1"
+    assert gw.tunnel.startswith(b"GET /x HTTP/1.1\r\n")
+    assert b"Proxy-Authorization" not in gw.tunnel
+    assert _CHAIN_TOKEN.encode() not in gw.tunnel
+
+
+def test_the_shim_still_denies_before_contacting_the_gateway(fake_gateway, capsys):
+    gw = fake_gateway()
+    proxy = egress_proxy.install(_chain_env(gw))
+    try:
+        client, status = _ask(proxy.address, b"CONNECT evil.example:443 HTTP/1.1\r\n\r\n")
+        client.close()
+    finally:
+        proxy.close()
+    assert status == b"HTTP/1.1 403 Forbidden"
+    assert gw.accepted == 0
+
+
+@pytest.mark.parametrize(
+    ("gateway_status", "client_status"),
+    [
+        (b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n", b"HTTP/1.1 403 Forbidden"),
+        (b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Bearer\r\n\r\n",
+         b"HTTP/1.1 502 Bad Gateway"),
+        (b"garbage\r\n\r\n", b"HTTP/1.1 502 Bad Gateway"),
+    ],
+)
+def test_a_gateway_refusal_reaches_the_client_without_its_headers(
+    fake_gateway, capsys, gateway_status, client_status
+):
+    gw = fake_gateway(status=gateway_status)
+    proxy = egress_proxy.install(_chain_env(gw))
+    try:
+        client, status = _ask(proxy.address, b"CONNECT allowed.example:443 HTTP/1.1\r\n\r\n")
+        client.close()
+    finally:
+        proxy.close()
+    assert status == client_status
+    assert _CHAIN_TOKEN not in capsys.readouterr().err
+
+
+def test_an_unreachable_gateway_is_502_never_a_direct_dial(upstream):
+    dead = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    dead.bind(("127.0.0.1", 0))
+    port = dead.getsockname()[1]
+    dead.close()
+    proxy = egress_proxy.install({
+        "SANDBOX_EGRESS_ALLOW": "127.0.0.1",
+        "SANDBOX_EGRESS_UPSTREAM": f"127.0.0.1:{port}",
+        "VSIFY_EGRESS_TOKEN": _CHAIN_TOKEN,
+    })
+    try:
+        client, status = _ask(proxy.address, f"CONNECT 127.0.0.1:{upstream.port} HTTP/1.1\r\n\r\n".encode())
+        client.close()
+    finally:
+        proxy.close()
+    assert status == b"HTTP/1.1 502 Bad Gateway"
+    assert upstream.accepted == 0
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"SANDBOX_EGRESS_UPSTREAM": "vsify-egress-gw:3128"},
+        {"SANDBOX_EGRESS_UPSTREAM": "vsify-egress-gw:3128", "VSIFY_EGRESS_TOKEN": ""},
+        {"SANDBOX_EGRESS_UPSTREAM": "vsify-egress-gw:3128", "VSIFY_EGRESS_TOKEN": "a b\r\nX: y"},
+        {"SANDBOX_EGRESS_UPSTREAM": "vsify-egress-gw", "VSIFY_EGRESS_TOKEN": _CHAIN_TOKEN},
+        {"SANDBOX_EGRESS_UPSTREAM": "", "VSIFY_EGRESS_TOKEN": _CHAIN_TOKEN},
+    ],
+    ids=["no_token", "empty_token", "header_injection", "no_port", "blank"],
+)
+def test_a_misconfigured_chain_refuses_to_start(env):
+    env = {"SANDBOX_EGRESS_ALLOW": "allowed.example", **env}
+    with pytest.raises(egress_proxy.EgressUpstreamConfigError) as excinfo:
+        egress_proxy.install(env)
+    assert isinstance(excinfo.value, OSError), "the entrypoint maps OSError to a setup failure"
+    assert _CHAIN_TOKEN not in str(excinfo.value)
+    assert "VSIFY_EGRESS_TOKEN" not in env
+
+
+def test_a_misconfigured_chain_stops_the_entrypoint_before_the_module_is_imported(
+    tmp_path, monkeypatch
+):
+    marker = tmp_path / "imported"
+    module_file = tmp_path / "entrypoint"
+    module_file.write_text(f"open({str(marker)!r}, 'w').close()\ndef serve(payload):\n    return payload\n")
+    monkeypatch.setattr(entrypoint, "ENTRYPOINT_PATH", str(module_file))
+    monkeypatch.setattr(
+        entrypoint.os, "environ",
+        {"VSIFY_SANDBOX_ENTRYPOINT_KIND": "script", "VSIFY_SANDBOX_TRANSPORT": "stdio",
+         "SANDBOX_EGRESS_ALLOW": "allowed.example", "SANDBOX_EGRESS_UPSTREAM": "vsify-egress-gw:3128"},
+    )
+    assert entrypoint.main() == 1
+    assert not marker.exists()
+
+
+# --------------------------------------------------------------------------- the head deadline
+
+
+def _trickle(sock: socket.socket, stop: threading.Event, data: bytes = b"CONNECT a.example:443 HTTP/1.1\r\n"
+             ) -> None:
+    """Send one byte every 50 ms (well inside any per-recv timeout), never finishing the head.
+    Bounded at 3 s, so a reader with no overall deadline fails the test instead of hanging it."""
+    for i in range(60):
+        if stop.wait(0.05):
+            return
+        try:
+            sock.sendall(data[i % len(data):i % len(data) + 1])
+        except OSError:
+            return
+
+
+class _StepClock:
+    """A monotonic clock that advances ``step`` seconds per read, never real time (R-24)."""
+
+    def __init__(self, step: float):
+        self.step, self.now = step, 0.0
+
+    def monotonic(self) -> float:
+        self.now += self.step
+        return self.now
+
+
+class _TrickleSocket:
+    """A peer that answers every ``recv`` with one byte and never ends the head (slowloris)."""
+
+    def __init__(self, per_recv: float):
+        self.timeout, self.recvs, self.timeouts_set = per_recv, 0, []
+
+    def gettimeout(self):
+        return self.timeout
+
+    def settimeout(self, value):
+        self.timeouts_set.append(value)
+        self.timeout = value
+
+    def recv(self, _n):
+        self.recvs += 1
+        return b"A"
+
+
+def test_read_head_enforces_one_overall_deadline_over_a_trickle(monkeypatch):
+    """Slowloris: each byte lands well inside the 5 s per-recv timeout, so only an OVERALL head
+    deadline can stop it. With a clock that moves 0.1 s per read and a 0.5 s deadline, the read
+    gives up after a handful of recvs; without the deadline it would read forever."""
+    monkeypatch.setattr(egress_wire, "time", _StepClock(step=0.1))
+    sock = _TrickleSocket(per_recv=5.0)
+    with pytest.raises(egress_wire.BadRequest) as excinfo:
+        egress_wire.read_head(sock, deadline_s=0.5)
+    assert str(excinfo.value) == "head_deadline"
+    assert 1 <= sock.recvs <= 5, sock.recvs
+    # Each recv was bounded by what the deadline had left, never the 5 s per-recv timeout ...
+    assert all(t < 5.0 for t in sock.timeouts_set[:-1]), sock.timeouts_set
+    # ... and the caller's per-recv timeout is restored on the way out.
+    assert sock.gettimeout() == 5.0
+
+
+def test_read_head_reads_a_normal_head_unchanged():
+    server, client = socket.socketpair()
+    with server, client:
+        server.settimeout(5.0)
+        client.sendall(b"CONNECT a.example:443 HTTP/1.1\r\nHost: a\r\n\r\nearly")
+        assert egress_wire.read_head(server, deadline_s=0.5) == (
+            b"CONNECT a.example:443 HTTP/1.1\r\nHost: a", b"early")
+        assert server.gettimeout() == 5.0
+
+
+def test_the_shim_drops_a_trickling_client_at_the_head_deadline(start_proxy, monkeypatch):
+    monkeypatch.setattr(egress_proxy, "_HEAD_DEADLINE_S", 0.5)
+    address = start_proxy("allowed.example")
+    stop = threading.Event()
+    client = socket.create_connection(address, timeout=_TIMEOUT_S)
+    sender = threading.Thread(target=_trickle, args=(client, stop), daemon=True)
+    sender.start()
+    try:
+        client.settimeout(8.0)  # generous under load, and far under the shim's 30 s per-recv timeout
+        reply = client.recv(4096)
+        assert reply.startswith(b"HTTP/1.1 400 "), reply
+    finally:
+        stop.set()
+        sender.join(timeout=_TIMEOUT_S)
+        client.close()
