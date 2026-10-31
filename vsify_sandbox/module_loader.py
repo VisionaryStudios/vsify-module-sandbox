@@ -17,6 +17,13 @@ classification never runs. The executed module still gets the dunders an import 
 (``__spec__``, ``__file__``, ``__package__ == ''``); only ``__loader__`` is ``None``, because no loader
 ever re-reads the file.
 
+Approved bytes (issue #1310): the host bind-mounts the entrypoint from its REPO path, so the file can
+be replaced between the host's materialize-time byte check and the mount. The host therefore passes
+``sha256`` of the approved bytes in, and the bytes read here must hash to it before they are
+classified or executed (``entrypoint_digest_mismatch``). No digest at all is a refusal too
+(``entrypoint_digest_missing``), never a skipped check — the same model ``layout: package`` uses for
+``mount_files_sha256``.
+
 Every refusal is a :class:`_LoadRefused` carrying a fixed reason token — never an exception message,
 path, or content digest. The reason strings the image emitted before this module existed are
 preserved verbatim.
@@ -25,8 +32,9 @@ preserved verbatim.
 instead of one file, every member is walked and read once by the shared ``package_tree`` walker, the
 map's digest must equal the one the host signed, every member is classified, and only then are
 exactly the mapped bytes extracted to a private scratch directory and imported normally. The
-``layout: file`` path above is unchanged.
+``layout: file`` path above is unchanged except for the approved-bytes digest check.
 """
+import hashlib as _hashlib
 import importlib as _importlib
 import importlib.util as _importlib_util
 import os as _os
@@ -80,7 +88,24 @@ def _read_entrypoint_once(path: str, limit: int | None = None) -> bytes:
         raise _LoadRefused("entrypoint_unloadable") from None
 
 
-def _load_entrypoint(path, kind, module_ref, *, classify, validate_ref, max_source_bytes):
+_ENTRYPOINT_DIGEST_MISSING = "entrypoint_digest_missing"
+_ENTRYPOINT_DIGEST_MISMATCH = "entrypoint_digest_mismatch"
+
+
+def _expected_entrypoint_digest(expected_sha256) -> str:
+    """The approved-bytes digest as 64 lowercase hex, or a refusal: nothing given (``None`` or
+    empty) is ``entrypoint_digest_missing``; anything else that is not 64 lowercase hex is
+    ``entrypoint_digest_mismatch`` (no bytes can ever hash to it)."""
+    if expected_sha256 is None or expected_sha256 == "":
+        raise _LoadRefused(_ENTRYPOINT_DIGEST_MISSING)
+    expected = str(expected_sha256)
+    if len(expected) != 64 or any(ch not in "0123456789abcdef" for ch in expected):
+        raise _LoadRefused(_ENTRYPOINT_DIGEST_MISMATCH)
+    return expected
+
+
+def _load_entrypoint(path, kind, module_ref, *, classify, validate_ref, max_source_bytes,
+                     expected_sha256):
     """Load the entrypoint at ``path`` and return its ``serve`` callable, or raise :class:`_LoadRefused`.
 
     ``classify`` is the import-closure analyser (``import_closure._classify_imports``): a callable
@@ -91,8 +116,15 @@ def _load_entrypoint(path, kind, module_ref, *, classify, validate_ref, max_sour
     it, and one over it is refused ``entrypoint_unparseable`` (the analyser's verdict for it) without
     being read whole. All three are required keywords so this file never imports its sibling.
 
-    Order, each a refusal: kind -> dotted ref (``python_module`` only) -> the file -> the import closure
-    (``python_module`` only; the ``script`` kind is not checked) -> compile + execute -> ``serve``."""
+    ``expected_sha256`` (issue #1310) is the sha256 of the bytes the host's approval covers. It is
+    required, and has no "skip" value: absent or empty is ``entrypoint_digest_missing``, malformed or
+    different from the hash of the bytes read is ``entrypoint_digest_mismatch``.
+
+    Order, each a refusal: kind -> dotted ref (``python_module`` only) -> the expected digest is
+    present and well formed -> the file -> its size (``python_module`` only) -> its sha256 equals the
+    expected digest -> the import closure (``python_module`` only; the ``script`` kind is not
+    checked) -> compile + execute -> ``serve``. The bytes hashed are the bytes classified and the
+    bytes executed: one read, no re-read."""
     if kind not in _SUPPORTED_KINDS:
         raise _LoadRefused(f"unsupported_entrypoint_kind:{kind}")
 
@@ -103,12 +135,15 @@ def _load_entrypoint(path, kind, module_ref, *, classify, validate_ref, max_sour
         except ValueError:
             raise _LoadRefused("entrypoint_ref_malformed") from None
         module_name = "_".join(segments) or module_name  # for __name__/log messages only
+    expected = _expected_entrypoint_digest(expected_sha256)
 
     filename = _os.fspath(path)
     if kind == "python_module":
         source = _read_entrypoint_once(filename, max_source_bytes)
         if len(source) > max_source_bytes:
             raise _LoadRefused("entrypoint_unparseable")
+        if _hashlib.sha256(source).hexdigest() != expected:
+            raise _LoadRefused(_ENTRYPOINT_DIGEST_MISMATCH)
         try:
             reason = classify(source)
         except Exception:  # noqa: BLE001 — fail closed: a faulting analyser is a refusal, never a pass
@@ -117,6 +152,8 @@ def _load_entrypoint(path, kind, module_ref, *, classify, validate_ref, max_sour
             raise _LoadRefused(str(reason))
     else:
         source = _read_entrypoint_once(filename)
+        if _hashlib.sha256(source).hexdigest() != expected:
+            raise _LoadRefused(_ENTRYPOINT_DIGEST_MISMATCH)
 
     # The dunders ``module_from_spec(SourceFileLoader(...))`` gave the module before this loader
     # existed — ``__spec__`` (origin = the file), ``__file__``, ``__package__ == ''`` — from a spec

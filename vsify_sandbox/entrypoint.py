@@ -7,7 +7,13 @@ Dispatch env vars (all non-secret, set by ``ContainerIsolationBackend._build_ser
 - ``VSIFY_SANDBOX_ENTRYPOINT_KIND``: ``"script"`` | ``"python_module"`` (always set)
 - ``VSIFY_SANDBOX_ENTRYPOINT_MODULE``: the dotted ref (only set for ``python_module``)
 - ``VSIFY_SANDBOX_ENTRYPOINT_LAYOUT``: ``"package"`` for a ``layout: package`` module (issue #862);
-  absent or ``"file"`` keeps the single-file path below byte-for-byte
+  absent or ``"file"`` keeps the single-file path below, except that its bytes must now match the
+  approved digest (``VSIFY_SANDBOX_ENTRYPOINT_SHA256``, next entry)
+- ``VSIFY_SANDBOX_ENTRYPOINT_SHA256``: sha256 of the approved entrypoint bytes (``layout: file``,
+  both kinds; issue #1310). REQUIRED: absent or empty refuses ``entrypoint_digest_missing``, and bytes
+  read from the mount that hash to anything else refuse ``entrypoint_digest_mismatch``. A host that
+  predates this release never sets it, so its file-layout launches are refused by this image (fail
+  closed); a current host refuses an image whose loader predates it (``runtime_image_loader_skew``)
 - ``VSIFY_SANDBOX_PACKAGE_FILES_SHA256``: the signed package file-map digest (``package`` only)
 - ``VSIFY_SANDBOX_ALLOWED_IMPORTS``: the module's ``core.runtime.imports``, comma-joined (``package``
   only; empty for a stdlib-only package)
@@ -51,6 +57,7 @@ _TRANSPORT_ENV = "VSIFY_SANDBOX_TRANSPORT"
 _ENTRYPOINT_KIND_ENV = "VSIFY_SANDBOX_ENTRYPOINT_KIND"
 _ENTRYPOINT_MODULE_ENV = "VSIFY_SANDBOX_ENTRYPOINT_MODULE"
 _ENTRYPOINT_LAYOUT_ENV = "VSIFY_SANDBOX_ENTRYPOINT_LAYOUT"
+_ENTRYPOINT_SHA256_ENV = "VSIFY_SANDBOX_ENTRYPOINT_SHA256"
 _PACKAGE_FILES_SHA256_ENV = "VSIFY_SANDBOX_PACKAGE_FILES_SHA256"
 _ALLOWED_IMPORTS_ENV = "VSIFY_SANDBOX_ALLOWED_IMPORTS"
 _SOCKET_ENV = "VSIFY_SANDBOX_SOCKET"
@@ -116,7 +123,9 @@ def _load_serve_callable() -> Callable[[bytes], bytes]:
     instead of ``entrypoint_import_failed:ImportError`` from inside the module.
 
     ``VSIFY_SANDBOX_ENTRYPOINT_LAYOUT`` absent or ``file`` takes exactly that path; ``package`` takes
-    :func:`_load_package_serve_callable` (issue #862)."""
+    :func:`_load_package_serve_callable` (issue #862). The file path hands the loader
+    ``VSIFY_SANDBOX_ENTRYPOINT_SHA256`` as the digest the bytes it reads must hash to (issue #1310);
+    an absent variable is passed as ``""``, which the loader refuses (``entrypoint_digest_missing``)."""
     kind = os.environ.get(_ENTRYPOINT_KIND_ENV, "")
     ref = os.environ.get(_ENTRYPOINT_MODULE_ENV, "")
     layout = os.environ.get(_ENTRYPOINT_LAYOUT_ENV, "") or "file"
@@ -132,6 +141,7 @@ def _load_serve_callable() -> Callable[[bytes], bytes]:
             classify=import_closure._classify_imports,
             validate_ref=import_closure._validate_dotted_ref,
             max_source_bytes=import_closure._MAX_SOURCE_BYTES,
+            expected_sha256=os.environ.get(_ENTRYPOINT_SHA256_ENV, ""),
         )
     except module_loader._LoadRefused as exc:
         raise SetupError(exc.reason) from exc

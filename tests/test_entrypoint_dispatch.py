@@ -4,6 +4,7 @@ real temp file loaded via the actual ``importlib`` path.
 """
 from __future__ import annotations
 
+import hashlib
 import io
 
 import pytest
@@ -61,7 +62,14 @@ def echo_module(tmp_path, monkeypatch):
     module_file = tmp_path / "entrypoint"
     module_file.write_text("def serve(payload: bytes) -> bytes:\n    return payload\n")
     monkeypatch.setattr(entrypoint, "ENTRYPOINT_PATH", str(module_file))
+    _approve(monkeypatch, module_file)
     return module_file
+
+
+def _approve(monkeypatch, module_file) -> None:
+    """The host's approved-bytes digest for the file as written (issue #1310)."""
+    monkeypatch.setenv("VSIFY_SANDBOX_ENTRYPOINT_SHA256",
+                       hashlib.sha256(module_file.read_bytes()).hexdigest())
 
 
 class TestLoadServeCallable:
@@ -91,6 +99,7 @@ class TestLoadServeCallable:
         module_file = tmp_path / "entrypoint"  # no .py suffix — mirrors the real mount target
         module_file.write_text("x = 1\n")  # no `serve` defined
         monkeypatch.setattr(entrypoint, "ENTRYPOINT_PATH", str(module_file))
+        _approve(monkeypatch, module_file)
         monkeypatch.setenv("VSIFY_SANDBOX_ENTRYPOINT_KIND", "script")
         with pytest.raises(entrypoint.SetupError) as ei:
             entrypoint._load_serve_callable()
@@ -99,8 +108,10 @@ class TestLoadServeCallable:
     def test_missing_entrypoint_file_refuses(self, tmp_path, monkeypatch):
         monkeypatch.setattr(entrypoint, "ENTRYPOINT_PATH", str(tmp_path / "does-not-exist.py"))
         monkeypatch.setenv("VSIFY_SANDBOX_ENTRYPOINT_KIND", "script")
-        with pytest.raises(entrypoint.SetupError):
+        monkeypatch.setenv("VSIFY_SANDBOX_ENTRYPOINT_SHA256", "0" * 64)
+        with pytest.raises(entrypoint.SetupError) as ei:
             entrypoint._load_serve_callable()
+        assert str(ei.value) == "entrypoint_missing"
 
 
 class TestServeForever:

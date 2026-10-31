@@ -7,6 +7,7 @@ framework's ``tests/conftest.py`` never reaches it. Helpers the sandbox tests ne
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
 import json
 import sys
@@ -53,6 +54,17 @@ def stage_load_case(case: dict, tmp_path: Path) -> Path:
         return target
     target.write_bytes(source)
     return target
+
+
+def staged_sha256(target: Path) -> str:
+    """The ``expected_sha256`` a ``load`` case passes: sha256 of the staged file's bytes AS STAGED,
+    i.e. what the host approved (issue #1310). A staged path that is not a regular file (missing, a
+    directory, a symlink) gets a well-formed placeholder, so the loader reaches its own refusal for
+    the path rather than a digest one. Taken before the load, so a ``swap_after_classify`` swap is
+    a change AFTER approval."""
+    if target.is_symlink() or not target.is_file():
+        return "0" * 64
+    return hashlib.sha256(target.read_bytes()).hexdigest()
 
 
 def classifier_for(case: dict, target: Path, classify):

@@ -23,7 +23,7 @@ Three tables:
 | Table | Each row | Asserted against |
 |---|---|---|
 | `classify` | `id`, `source`, `expect` (a reason token or `null`) | `_classify_imports(source_bytes)` |
-| `load` | `id`, `source`, `kind`, `module_ref`, `expect` (`"ok"` or a reason token), optional `setup`, `swap_source`, `serve_io` | `_load_entrypoint(...)`, and `serve(bytes.fromhex(in_hex)) == bytes.fromhex(out_hex)` when `ok` |
+| `load` | `id`, `source`, `kind`, `module_ref`, `expect` (`"ok"` or a reason token), optional `setup`, `swap_source`, `serve_io` | `_load_entrypoint(...)` with `expected_sha256=staged_sha256(target)` (the staged bytes are the approved ones), and `serve(bytes.fromhex(in_hex)) == bytes.fromhex(out_hex)` when `ok` |
 | `dotted_refs` | `ref`, `expect` (the segment list, or `"entrypoint_ref_malformed"`) | `_validate_dotted_ref(ref)`, and the host's `entrypoint_ref._dotted_ref_candidates` |
 
 ### `source`

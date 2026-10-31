@@ -18,6 +18,7 @@ from conftest import (
     corpus_source_bytes,
     load_loader_corpus,
     stage_load_case,
+    staged_sha256,
 )
 
 from vsify_sandbox import entrypoint, import_closure, module_loader
@@ -35,12 +36,14 @@ def _classifier_for(case: dict, target: Path):
 @pytest.mark.parametrize("case", _CORPUS["load"], ids=lambda case: case["id"])
 def test_corpus_load(case, tmp_path):
     target = _stage(case, tmp_path)
+    approved = staged_sha256(target)
     load = lambda: module_loader._load_entrypoint(  # noqa: E731
         str(target),
         case["kind"],
         case["module_ref"],
         classify=_classifier_for(case, target),
         validate_ref=import_closure._validate_dotted_ref, max_source_bytes=_CAP,
+        expected_sha256=approved,
     )
     if case["expect"] != "ok":
         with pytest.raises(module_loader._LoadRefused) as ei:
@@ -59,7 +62,7 @@ def test_the_swap_case_really_swapped_the_file(tmp_path):
     module_loader._load_entrypoint(
         str(target), case["kind"], case["module_ref"],
         classify=_classifier_for(case, target), validate_ref=import_closure._validate_dotted_ref,
-        max_source_bytes=_CAP,
+        max_source_bytes=_CAP, expected_sha256=staged_sha256(target),
     )
     assert target.read_bytes() == corpus_source_bytes(case["swap_source"])
 
@@ -72,10 +75,7 @@ def test_a_faulting_analyser_fails_closed(tmp_path):
         raise RuntimeError("analyser fault")
 
     with pytest.raises(module_loader._LoadRefused) as ei:
-        module_loader._load_entrypoint(
-            str(target), "python_module", "entrypoint",
-            classify=_boom, validate_ref=import_closure._validate_dotted_ref, max_source_bytes=_CAP,
-        )
+        _load(target, ref="entrypoint", classify=_boom)
     assert ei.value.reason == "entrypoint_unparseable"
 
 
@@ -86,10 +86,7 @@ def test_the_script_kind_never_calls_the_analyser(tmp_path):
     def _must_not_run(source):
         raise AssertionError("script kind was classified")
 
-    serve = module_loader._load_entrypoint(
-        str(target), "script", "", classify=_must_not_run,
-        validate_ref=import_closure._validate_dotted_ref, max_source_bytes=_CAP,
-    )
+    serve = _load(target, kind="script", ref="", classify=_must_not_run)
     assert serve(b"x") == b"x"
 
 
@@ -98,11 +95,7 @@ def test_module_code_does_not_inherit_the_loaders_compiler_flags(tmp_path):
     target = tmp_path / "entrypoint"
     target.write_bytes(b"def f(x: vsify_undefined_name): pass\ndef serve(p):\n    return p\n")
     with pytest.raises(module_loader._LoadRefused) as ei:
-        module_loader._load_entrypoint(
-            str(target), "python_module", "entrypoint",
-            classify=import_closure._classify_imports,
-            validate_ref=import_closure._validate_dotted_ref, max_source_bytes=_CAP,
-        )
+        _load(target, ref="entrypoint")
     assert ei.value.reason == "entrypoint_import_failed:NameError"
 
 
@@ -113,18 +106,17 @@ def test_module_code_does_not_inherit_the_loaders_compiler_flags(tmp_path):
 def test_the_module_runs_under_its_ref_derived_name(tmp_path, kind, ref, expected_name):
     target = tmp_path / "entrypoint"
     target.write_bytes(b"def serve(p):\n    return __name__.encode() + b'|' + __file__.encode()\n")
-    serve = module_loader._load_entrypoint(
-        str(target), kind, ref,
-        classify=import_closure._classify_imports, validate_ref=import_closure._validate_dotted_ref,
-        max_source_bytes=_CAP,
-    )
+    serve = _load(target, kind=kind, ref=ref)
     assert serve(b"") == f"{expected_name}|{target}".encode()
 
 
 def _load(target, kind="python_module", ref="modules.acme.entrypoint", **overrides):
+    """Load ``target`` with the image's own collaborators. ``expected_sha256`` defaults to the hash
+    of the file's bytes right now (what the host approved), unless a test overrides it."""
     kwargs = {"classify": import_closure._classify_imports,
               "validate_ref": import_closure._validate_dotted_ref, "max_source_bytes": _CAP}
     kwargs.update(overrides)
+    kwargs.setdefault("expected_sha256", staged_sha256(Path(target)))
     return module_loader._load_entrypoint(str(target), kind, ref, **kwargs)
 
 
@@ -268,8 +260,103 @@ def test_the_image_entrypoint_passes_the_analysers_cap(monkeypatch):
         return lambda p: p
 
     monkeypatch.setattr(module_loader, "_load_entrypoint", _spy)
+    monkeypatch.setenv("VSIFY_SANDBOX_ENTRYPOINT_SHA256", "ab" * 32)
     entrypoint._load_serve_callable()
     assert seen["max_source_bytes"] == import_closure._MAX_SOURCE_BYTES
+    assert seen["expected_sha256"] == "ab" * 32
+
+
+def test_the_image_entrypoint_passes_an_absent_digest_as_empty(monkeypatch):
+    """No env value is handed to the loader as ``""`` — which it refuses — never as a skip."""
+    seen: dict = {}
+    monkeypatch.setenv("VSIFY_SANDBOX_ENTRYPOINT_KIND", "script")
+    monkeypatch.delenv("VSIFY_SANDBOX_ENTRYPOINT_SHA256", raising=False)
+
+    def _spy(*args, **kwargs):
+        seen.update(kwargs)
+        return lambda p: p
+
+    monkeypatch.setattr(module_loader, "_load_entrypoint", _spy)
+    entrypoint._load_serve_callable()
+    assert seen["expected_sha256"] == ""
+
+
+# --------------------------------------------------------------------------- approved bytes (#1310)
+
+
+_APPROVED = b"def serve(p):\n    return b'approved'\n"
+
+
+def _swapped_source(marker: Path) -> bytes:
+    """Bytes that would record that they ran (a marker file) if the loader ever executed them."""
+    return (f"open({str(marker)!r}, 'w').close()\n"
+            "def serve(p):\n    return b'swapped'\n").encode()
+
+
+@pytest.mark.parametrize("kind", ["python_module", "script"])
+def test_a_file_swapped_after_approval_is_refused_and_never_run(tmp_path, kind):
+    """The check-to-mount window: the host approved (and byte-checked) ``_APPROVED``, then the file
+    was replaced before the image read it. The loader refuses on the digest, before classifying or
+    executing anything it read."""
+    target = tmp_path / "entrypoint"
+    target.write_bytes(_APPROVED)
+    approved = staged_sha256(target)
+    marker = tmp_path / "ran"
+    target.write_bytes(_swapped_source(marker))  # swapped between the check and the load
+    with pytest.raises(module_loader._LoadRefused) as ei:
+        _load(target, kind=kind, expected_sha256=approved)
+    assert ei.value.reason == "entrypoint_digest_mismatch" == str(ei.value)
+    assert not marker.exists()
+    # Control: the same loader runs the approved bytes.
+    target.write_bytes(_APPROVED)
+    assert _load(target, kind=kind, expected_sha256=approved)(b"") == b"approved"
+
+
+def test_a_swapped_python_module_never_reaches_the_analyser(tmp_path):
+    target = tmp_path / "entrypoint"
+    target.write_bytes(_APPROVED)
+    approved = staged_sha256(target)
+    target.write_bytes(b"import socket\ndef serve(p):\n    return p\n")
+
+    def _must_not_run(source):
+        raise AssertionError("unapproved bytes reached the analyser")
+
+    with pytest.raises(module_loader._LoadRefused) as ei:
+        _load(target, classify=_must_not_run, expected_sha256=approved)
+    assert ei.value.reason == "entrypoint_digest_mismatch"
+
+
+@pytest.mark.parametrize("kind", ["python_module", "script"])
+@pytest.mark.parametrize("value", [None, ""])
+def test_no_digest_is_refused_not_skipped(tmp_path, kind, value):
+    target = tmp_path / "entrypoint"
+    target.write_bytes(_APPROVED)
+    with pytest.raises(module_loader._LoadRefused) as ei:
+        _load(target, kind=kind, expected_sha256=value)
+    assert ei.value.reason == "entrypoint_digest_missing"
+
+
+@pytest.mark.parametrize("value", ["A" * 64, "ab" * 31, "g" * 64, "ab" * 33, 12345])
+def test_a_malformed_digest_is_a_mismatch(tmp_path, value):
+    target = tmp_path / "entrypoint"
+    target.write_bytes(_APPROVED)
+    with pytest.raises(module_loader._LoadRefused) as ei:
+        _load(target, expected_sha256=value)
+    assert ei.value.reason == "entrypoint_digest_mismatch"
+
+
+def test_a_missing_digest_is_refused_before_the_file_is_read(tmp_path, monkeypatch):
+    """Like ``layout: package``, the expected digest is validated before the mount is touched."""
+    target = tmp_path / "entrypoint"
+    target.write_bytes(_APPROVED)
+
+    def _no_read(*a, **k):
+        raise AssertionError("the file was read with no digest to check it against")
+
+    monkeypatch.setattr(module_loader, "_read_entrypoint_once", _no_read)
+    with pytest.raises(module_loader._LoadRefused) as ei:
+        _load(target, expected_sha256="")
+    assert ei.value.reason == "entrypoint_digest_missing"
 
 
 def test_module_loader_is_mirrorable():
@@ -289,7 +376,13 @@ def mounted(tmp_path, monkeypatch):
     monkeypatch.setattr(entrypoint, "ENTRYPOINT_PATH", str(target))
     monkeypatch.setenv("VSIFY_SANDBOX_ENTRYPOINT_KIND", "python_module")
     monkeypatch.setenv("VSIFY_SANDBOX_ENTRYPOINT_MODULE", "modules.acme.entrypoint")
+    monkeypatch.delenv("VSIFY_SANDBOX_ENTRYPOINT_SHA256", raising=False)
     return target
+
+
+def _approve(monkeypatch, path: Path) -> None:
+    """What the host projects: sha256 of the bytes it approved, as ``VSIFY_SANDBOX_ENTRYPOINT_SHA256``."""
+    monkeypatch.setenv("VSIFY_SANDBOX_ENTRYPOINT_SHA256", staged_sha256(path))
 
 
 @pytest.mark.parametrize("case_id, reason", [
@@ -297,22 +390,26 @@ def mounted(tmp_path, monkeypatch):
     ("m365_relative_import", "entrypoint_relative_import"),
     ("syntax_error", "entrypoint_unparseable"),
 ])
-def test_load_serve_callable_refuses_an_incompatible_python_module(mounted, case_id, reason):
+def test_load_serve_callable_refuses_an_incompatible_python_module(mounted, monkeypatch, case_id,
+                                                                   reason):
     case = next(c for c in _CORPUS["classify"] if c["id"] == case_id)
     mounted.write_bytes(corpus_source_bytes(case["source"]))
+    _approve(monkeypatch, mounted)
     with pytest.raises(entrypoint.SetupError) as ei:
         entrypoint._load_serve_callable()
     assert str(ei.value) == reason
 
 
-def test_load_serve_callable_launches_the_stdlib_bundle(mounted):
+def test_load_serve_callable_launches_the_stdlib_bundle(mounted, monkeypatch):
     mounted.write_bytes(corpus_source_bytes({"file": "m365_stdlib_bundle.src"}))
+    _approve(monkeypatch, mounted)
     assert entrypoint._load_serve_callable()(b"ok") == b"ok"
 
 
-def test_load_serve_callable_refuses_a_symlinked_entrypoint(mounted, tmp_path):
+def test_load_serve_callable_refuses_a_symlinked_entrypoint(mounted, monkeypatch, tmp_path):
     real = tmp_path / "elsewhere"
     real.write_bytes(b"def serve(p):\n    return p\n")
+    _approve(monkeypatch, real)
     os.symlink(real, mounted)
     with pytest.raises(entrypoint.SetupError) as ei:
         entrypoint._load_serve_callable()
@@ -321,11 +418,38 @@ def test_load_serve_callable_refuses_a_symlinked_entrypoint(mounted, tmp_path):
 
 def test_load_serve_callable_reads_the_path_at_call_time(mounted, tmp_path, monkeypatch):
     mounted.write_bytes(b"def serve(p):\n    return b'first'\n")
+    _approve(monkeypatch, mounted)
     assert entrypoint._load_serve_callable()(b"") == b"first"
     second = tmp_path / "second"
     second.write_bytes(b"def serve(p):\n    return b'second'\n")
+    _approve(monkeypatch, second)
     monkeypatch.setattr(entrypoint, "ENTRYPOINT_PATH", str(second))
     assert entrypoint._load_serve_callable()(b"") == b"second"
+
+
+@pytest.mark.parametrize("kind", ["python_module", "script"])
+def test_load_serve_callable_refuses_a_launch_with_no_digest(mounted, monkeypatch, kind):
+    """A file-layout launch with no ``VSIFY_SANDBOX_ENTRYPOINT_SHA256`` (a host that predates
+    issue #1310, or a spec built without one) is refused, never run unchecked."""
+    monkeypatch.setenv("VSIFY_SANDBOX_ENTRYPOINT_KIND", kind)
+    mounted.write_bytes(b"def serve(p):\n    return p\n")
+    with pytest.raises(entrypoint.SetupError) as ei:
+        entrypoint._load_serve_callable()
+    assert str(ei.value) == "entrypoint_digest_missing"
+
+
+@pytest.mark.parametrize("kind", ["python_module", "script"])
+def test_load_serve_callable_refuses_bytes_swapped_after_approval(mounted, monkeypatch, tmp_path,
+                                                                  kind):
+    monkeypatch.setenv("VSIFY_SANDBOX_ENTRYPOINT_KIND", kind)
+    mounted.write_bytes(_APPROVED)
+    _approve(monkeypatch, mounted)
+    marker = tmp_path / "ran"
+    mounted.write_bytes(_swapped_source(marker))
+    with pytest.raises(entrypoint.SetupError) as ei:
+        entrypoint._load_serve_callable()
+    assert str(ei.value) == "entrypoint_digest_mismatch"
+    assert not marker.exists()
 
 
 def test_the_egress_shim_still_starts_before_the_module_loads(monkeypatch):
