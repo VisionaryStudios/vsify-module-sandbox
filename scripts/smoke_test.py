@@ -7,6 +7,7 @@ Usage: python3 scripts/smoke_test.py <image-ref>
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import socket
 import subprocess
@@ -18,6 +19,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from vsify_sandbox.framing import FRAME_READY, FRAME_REQUEST, FRAME_RESPONSE, encode_frame, read_frame
 
 _ECHO_BODY = "def serve(payload: bytes) -> bytes:\n    return payload\n"
+
+# The image's loader requires the sha256 of the approved entrypoint bytes (issue #1310): no digest
+# refuses `entrypoint_digest_missing` and the container exits before READY. The host supplies it from
+# `SandboxSpec.entrypoint_sha256`; this script plays the host, so it hashes the bytes it mounts.
+_ENTRYPOINT_SHA256_ENV = "VSIFY_SANDBOX_ENTRYPOINT_SHA256"
+_ECHO_SHA256 = hashlib.sha256(_ECHO_BODY.encode()).hexdigest()
 
 
 def _containment_argv(image: str, name: str) -> list[str]:
@@ -45,6 +52,7 @@ def _run_stdio_check(image: str, entrypoint_kind: str, entrypoint_ref: str) -> N
         argv = _containment_argv(image, name)
         argv += ["-i", "--mount", f"type=bind,src={entry},dst=/module/entrypoint,ro"]
         argv += ["--env", f"VSIFY_SANDBOX_ENTRYPOINT_KIND={entrypoint_kind}"]
+        argv += ["--env", f"{_ENTRYPOINT_SHA256_ENV}={_ECHO_SHA256}"]
         argv += ["--env", "VSIFY_SANDBOX_TRANSPORT=stdio"]
         if entrypoint_ref:
             argv += ["--env", f"VSIFY_SANDBOX_ENTRYPOINT_MODULE={entrypoint_ref}"]
@@ -88,6 +96,7 @@ def _run_unix_socket_check(image: str, entrypoint_kind: str, entrypoint_ref: str
         argv += ["--mount", f"type=bind,src={entry},dst=/module/entrypoint,ro"]
         argv += ["--mount", f"type=bind,src={sock_dir},dst=/run/sandbox"]
         argv += ["--env", f"VSIFY_SANDBOX_ENTRYPOINT_KIND={entrypoint_kind}"]
+        argv += ["--env", f"{_ENTRYPOINT_SHA256_ENV}={_ECHO_SHA256}"]
         argv += ["--env", "VSIFY_SANDBOX_TRANSPORT=unix_socket"]
         argv += ["--env", "VSIFY_SANDBOX_SOCKET=/run/sandbox/session.sock"]
         if entrypoint_ref:
