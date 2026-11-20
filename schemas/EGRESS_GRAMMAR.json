@@ -221,7 +221,7 @@
   ],
   "egress_grammar_pin_version": 2,
   "env_var": "SANDBOX_EGRESS_ALLOW",
-  "framework_version": "0.16.0-rc.9",
+  "framework_version": "0.16.0-rc.10",
   "generated_by": "scripts/egress_grammar_vectors.py",
   "grammar_vectors": [
     {
@@ -933,6 +933,58 @@
       "negative_control": false,
       "sandbox_decision": "deny",
       "sandbox_env": "graph.microsoft.com"
+    },
+    {
+      "egress_allow": [
+        "*.example.com"
+      ],
+      "grammar_error": null,
+      "host": "a..example.com",
+      "match_error": null,
+      "matches": false,
+      "name": "empty_label_host_never_matches_a_wildcard",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "*.example.com"
+    },
+    {
+      "egress_allow": [
+        "*.example.com"
+      ],
+      "grammar_error": null,
+      "host": ".a.example.com",
+      "match_error": null,
+      "matches": false,
+      "name": "leading_dot_host_never_matches_a_wildcard",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "*.example.com"
+    },
+    {
+      "egress_allow": [
+        "a..example.com"
+      ],
+      "grammar_error": null,
+      "host": "a..example.com",
+      "match_error": null,
+      "matches": false,
+      "name": "empty_label_host_never_matches_its_own_literal",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "a..example.com"
+    },
+    {
+      "egress_allow": [
+        "*.sharepoint.com"
+      ],
+      "grammar_error": null,
+      "host": "contoso.sharepoint.com..",
+      "match_error": null,
+      "matches": false,
+      "name": "double_trailing_dot_host_never_matches",
+      "negative_control": false,
+      "sandbox_decision": "deny",
+      "sandbox_env": "*.sharepoint.com"
     },
     {
       "egress_allow": [],

@@ -75,6 +75,16 @@ def _normalize(value: str) -> str:
     return (value or "").strip().strip(".").lower()
 
 
+def _candidate_host(host: str) -> str:
+    """Mirror of ``egress_grammar._candidate_host``: the candidate host as matched, or ``""`` when it
+    has an empty label. One trailing root dot is dropped; a leading dot, ``..`` or a second trailing
+    dot leaves an empty label and the host matches nothing (issue #1517, I6)."""
+    candidate = (host or "").strip().lower()
+    if candidate.endswith("."):
+        candidate = candidate[:-1]
+    return "" if "" in candidate.split(".") else candidate
+
+
 @functools.lru_cache(maxsize=1024)
 def _wildcard_suffix(entry: str) -> str | None:
     """Mirror of ``egress_grammar._wildcard_suffix``: the suffix a wildcard delegates to, ``None``
@@ -115,7 +125,7 @@ def host_matches_egress_allow(host: str, egress_allow: Iterable[str]) -> bool:
     literal hit returns before a later malformed entry is examined, and a malformed entry reached
     first raises. The proxy never relies on that order — :func:`parse_egress_allow` refuses the
     whole list up front — but the mirror must reproduce it, or the vectors would disagree."""
-    normalized = _normalize(host)
+    normalized = _candidate_host(host)
     if not normalized:
         return False
     for raw in egress_allow:

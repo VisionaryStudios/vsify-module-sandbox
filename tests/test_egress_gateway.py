@@ -130,6 +130,78 @@ def test_every_match_vector_agrees_with_the_gateway_host_verdict():
         assert decision == vector["sandbox_decision"], f"vector {vector['name']!r}"
 
 
+def _through_handle(vector: dict) -> tuple[bytes, list[str], list[tuple[str, int]]]:
+    """Send ``CONNECT <vector host>:443`` to a real ``GatewayServer`` and return the response, every
+    name the resolver was asked about and every address the dialler was given. The dialler always
+    fails, so nothing leaves the process; what is measured is which NAME the handler judged,
+    resolved and dialled."""
+    allow = vector["sandbox_env"] or "unrelated.example"  # None: the host projects nothing, deny-all
+    try:
+        config = load_config(_env(SANDBOX_EGRESS_ALLOW=allow))
+    except GatewayConfigError:
+        # A projection with no usable entry (blank entries only) is a refused configuration: the
+        # gateway never starts, so nothing is resolved or dialled. The pin says deny for these too.
+        return RESPONSE_403, [], []
+    resolved: list[str] = []
+    dialled: list[tuple[str, int]] = []
+
+    def resolver(name: str, port: int) -> list[str]:
+        resolved.append(name)
+        return [_GLOBAL_IP]
+
+    def dialler(address: tuple[str, int], timeout: float) -> socket.socket:
+        dialled.append(address)
+        raise OSError("no upstream in this test")
+
+    server = egress_gateway.GatewayServer(("127.0.0.1", 0), config, resolver=resolver, dialer=dialler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host = vector["host"]
+        authority = f"[{host}]:443" if ":" in host else f"{host}:443"
+        client, head, rest = _ask(server.server_address, f"CONNECT {authority} HTTP/1.1\r\n{_auth()}\r\n")
+        client.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=_TIMEOUT_S)
+    return head + rest, resolved, dialled
+
+
+def test_every_match_vector_holds_through_the_gateway_handler():
+    """Issue #1517 (I6): the pin's verdict holds at the gateway's ``handle()``, not only in the
+    decision core. ``handle()`` once stripped edge dots (``_normalize``) BEFORE judging, so
+    ``.a.example.com`` and ``contoso.sharepoint.com..`` were allowed while the pin says deny. An
+    allowed vector is resolved exactly once and dialled at the validated address; a denied vector
+    is never resolved and never dialled."""
+    allowed = denied = 0
+    for vector in _load()["match_vectors"]:
+        response, resolved, dialled = _through_handle(vector)
+        if vector["sandbox_decision"] == "deny":
+            denied += 1
+            assert response == RESPONSE_403, f"vector {vector['name']!r}"
+            assert resolved == [] and dialled == [], f"vector {vector['name']!r} reached the network"
+        else:
+            allowed += 1
+            # The dialler refused, so an allowed vector ends 502 (it was judged, resolved and dialled).
+            assert len(resolved) == 1 and dialled == [(_GLOBAL_IP, 443)], f"vector {vector['name']!r}"
+            # The judged name IS the resolved name: the grammar's candidate form of the host.
+            assert resolved[0] == egress_policy._candidate_host(vector["host"]), f"vector {vector['name']!r}"
+            assert egress_policy.host_matches_egress_allow(resolved[0], vector["egress_allow"])
+    assert allowed and denied, "the pin must carry both allowed and denied vectors"
+
+
+@pytest.mark.parametrize("host", ["a..example.com", ".a.example.com", "contoso.sharepoint.com.."])
+def test_an_empty_label_host_is_denied_by_the_gateway_handler_and_never_resolved(host):
+    vector = {"host": host, "sandbox_env": "*.example.com,*.sharepoint.com"}
+    response, resolved, dialled = _through_handle(vector)
+    assert response == RESPONSE_403 and resolved == [] and dialled == []
+    # Control: the same host with the empty label removed is judged, resolved and dialled.
+    control = {"host": host.replace("..", ".").strip("."), "sandbox_env": vector["sandbox_env"]}
+    _, resolved, dialled = _through_handle(control)
+    assert resolved == [control["host"]] and dialled == [(_GLOBAL_IP, 443)]
+
+
 def test_the_shim_and_the_gateway_share_one_matcher():
     """No third copy: the shim's names ARE the decision core's."""
     assert egress_proxy.host_matches_egress_allow is egress_policy.host_matches_egress_allow

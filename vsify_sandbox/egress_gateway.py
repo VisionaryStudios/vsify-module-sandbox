@@ -83,6 +83,7 @@ from .egress_policy import (
     TOKEN_SCHEME,
     EgressPolicy,
     EgressPortsError,
+    _candidate_host,
     _normalize,
     addresses_verdict,
     parse_egress_allow,
@@ -540,8 +541,11 @@ class _GatewayHandler(socketserver.BaseRequestHandler):
             raw = _log_host(parts[1])
             self._deny(403, REASON_HOST, f"denied status=403 reason={REASON_HOST} host={raw}", raw)
             return
-        name = _normalize(host)
-        shown = _log_host(name)
+        # ONE name is judged, resolved and dialled: the grammar's candidate form (issue #1517). A
+        # host with an empty label has no candidate form (""), so the policy denies it and nothing is
+        # resolved or dialled; the refusal line still shows the host as written, edge dots stripped.
+        name = _candidate_host(host)
+        shown = _log_host(name or _normalize(host))
         verdict = target_verdict(name, port, config.policy, config.ports)
         if verdict == REASON_HOST:
             self._deny(403, REASON_HOST, f"denied status=403 reason={REASON_HOST} host={shown}", shown)

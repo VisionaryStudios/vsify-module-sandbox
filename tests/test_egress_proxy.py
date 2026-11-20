@@ -33,7 +33,7 @@ from pathlib import Path
 
 import pytest
 
-from vsify_sandbox import egress_proxy, egress_wire, entrypoint
+from vsify_sandbox import egress_policy, egress_proxy, egress_wire, entrypoint
 from vsify_sandbox.egress_proxy import (
     EgressGrammarError,
     EgressPolicy,
@@ -135,9 +135,9 @@ def test_the_vectors_would_catch_a_naive_suffix_matcher():
     disagree with the pin somewhere — otherwise agreement above proves nothing."""
 
     def naive(host, allow):
-        host = egress_proxy._normalize(host)
+        host = egress_policy._normalize(host)
         for raw in allow:
-            entry = egress_proxy._normalize(raw)
+            entry = egress_policy._normalize(raw)
             if entry and (host == entry or host.endswith(entry.removeprefix("*."))):
                 return True
         return False

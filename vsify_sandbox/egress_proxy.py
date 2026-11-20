@@ -87,7 +87,7 @@ from .egress_policy import (
     TOKEN_ENV,
     EgressGrammarError,
     EgressPolicy,
-    _normalize,
+    _candidate_host,
     assert_egress_allow_grammar,
     host_matches_egress_allow,
     parse_egress_allow,
@@ -222,7 +222,7 @@ class _ProxyHandler(socketserver.BaseRequestHandler):
             self._chain(client, host, port, forward, leftover)
             return
 
-        target_host = _normalize(host)
+        target_host = _candidate_host(host)  # the name `allows` judged (issue #1517)
         try:
             upstream = socket.create_connection((target_host, port), timeout=_CONNECT_TIMEOUT_S)
         except OSError as exc:
@@ -251,7 +251,7 @@ class _ProxyHandler(socketserver.BaseRequestHandler):
         token in ``Proxy-Authorization``, then the client's bytes through the tunnel (plain HTTP
         sends its rewritten head first). A gateway 403 reaches the client as 403; any other
         refusal or failure as 502. Neither the token nor a gateway header is ever echoed."""
-        target_host = _normalize(host)
+        target_host = _candidate_host(host)  # the name `allows` judged (issue #1517)
         authority = f"[{target_host}]:{port}" if ":" in target_host else f"{target_host}:{port}"
         try:
             upstream = socket.create_connection(self.server.upstream, timeout=_CONNECT_TIMEOUT_S)
